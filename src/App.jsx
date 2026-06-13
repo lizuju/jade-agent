@@ -118,6 +118,12 @@ function BottomNav({ active, go }) {
   );
 }
 
+function agentLabel(type) {
+  if (type === "lead_followup") return "客资跟进 Agent";
+  if (type === "image_generate") return "图片生成 Agent";
+  return "商品发布 Agent";
+}
+
 function ProductCard({ product, go }) {
   return (
     <button className="product-card" onClick={() => go("detail")}>
@@ -365,7 +371,7 @@ function Dashboard({ state, setState, go }) {
       {state.agentRuns?.length ? (
         <section className="agent-mini">
           <div className="section-head"><h3>Agent运行</h3><small>{state.agentRuns[0].createdAt}</small></div>
-          <strong>{state.agentRuns[0].agentType === "lead_followup" ? "客资跟进 Agent" : "商品发布 Agent"}</strong>
+          <strong>{agentLabel(state.agentRuns[0].agentType)}</strong>
           <span>{state.agentRuns[0].trace?.[0]?.detail ?? "暂无运行详情"}</span>
         </section>
       ) : null}
@@ -376,7 +382,35 @@ function Dashboard({ state, setState, go }) {
 
 function PublishGuide({ state, setState, go }) {
   const [loading, setLoading] = useState(false);
-  const images = ["/assets/jade-upload-bangle.jpg", "/assets/jade-pendant.jpg"];
+  const [imageLoading, setImageLoading] = useState(false);
+  const [images, setImages] = useState(state.publishImages?.length ? state.publishImages : ["/assets/jade-upload-bangle.jpg", "/assets/jade-pendant.jpg"]);
+  const imagePrompt = "冰种晴底翡翠手镯，55圈口，黑色岩石背景，商业珠宝摄影，真实自然光，高端电商主图";
+
+  async function generateImage() {
+    setImageLoading(true);
+    try {
+      const image = await api("/api/images/generate", {
+        method: "POST",
+        body: JSON.stringify({ prompt: imagePrompt })
+      });
+      const jobs = await api("/api/images/jobs?limit=6");
+      const runs = await api("/api/agent/runs");
+      const nextImages = [image.imageUrl, ...images.filter((item) => item !== image.imageUrl)].slice(0, 3);
+      setImages(nextImages);
+      setState((current) => ({
+        ...current,
+        publishImages: nextImages,
+        imageJobs: jobs.jobs,
+        agentRuns: runs.runs,
+        lastTrace: [
+          { label: "图片生成 Agent", detail: image.provider === "local-asset" ? "已使用本地素材生成发布图" : "已生成 OpenAI 商品图" },
+          { label: "素材入库", detail: `image_jobs：${image.status}` }
+        ]
+      }));
+    } finally {
+      setImageLoading(false);
+    }
+  }
 
   async function generateDraft() {
     setLoading(true);
@@ -398,13 +432,19 @@ function PublishGuide({ state, setState, go }) {
 
   return (
     <div className="screen">
-      <Header title="发布商品" left={<BackButton go={go} />} right={<span className="saving">{loading ? "AI生成中" : "AI辅助"}</span>} />
+      <Header title="发布商品" left={<BackButton go={go} />} right={<span className="saving">{loading || imageLoading ? "AI生成中" : "AI辅助"}</span>} />
       <section className="upload-card">
         <div className="step-title"><span>1.</span><strong>上传商品图片</strong><small>上传清晰的翡翠图片，AI将为您自动生成商品文案</small></div>
         <div className="upload-grid">
           {images.map((image) => <img key={image} src={image} alt="上传商品" />)}
-          <button><ImagePlus size={28} /><span>添加图片</span></button>
+          <button onClick={generateImage} disabled={imageLoading}><ImagePlus size={28} /><span>{imageLoading ? "生成中" : "AI生成图片"}</span></button>
         </div>
+        {state.imageJobs?.[0] ? (
+          <div className="image-job">
+            <strong>{state.imageJobs[0].provider === "openai" ? "OpenAI图片任务" : "本地素材任务"}</strong>
+            <span>{state.imageJobs[0].status} · {state.imageJobs[0].prompt}</span>
+          </div>
+        ) : null}
       </section>
       <section className="steps-card">
         {[
@@ -418,7 +458,7 @@ function PublishGuide({ state, setState, go }) {
           </div>
         ))}
       </section>
-      <button className="primary-button fixed-action" onClick={generateDraft} disabled={loading}>
+      <button className="primary-button publish-action" onClick={generateDraft} disabled={loading}>
         <Wand2 size={18} />
         {loading ? "AI正在生成..." : "AI生成商品信息"}
       </button>
@@ -748,6 +788,8 @@ export default function App() {
     match: null,
     draft: null,
     agentRuns: [],
+    imageJobs: [],
+    publishImages: null,
     followupByLead: {},
     lastTrace: []
   });

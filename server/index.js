@@ -8,6 +8,7 @@ import {
   getSellerByToken,
   getSellerLead,
   listAgentRuns,
+  listImageJobs,
   listLeads,
   listProducts,
   markLeadContacted,
@@ -83,10 +84,12 @@ app.get("/api/app-state", (req, res) => {
   const seller = optionalSeller(req);
   const products = listProducts(seller ? { sellerId: seller.id } : { publicOnly: true });
   const leads = seller ? listLeads(seller.id) : [];
+  const imageJobs = seller ? listImageJobs({ sellerId: seller.id, limit: 6 }) : [];
   res.json({
     seller,
     products,
     leads,
+    imageJobs,
     metrics: {
       listedProducts: products.filter((product) => product.status === "listed").length,
       productQuota: 100,
@@ -193,9 +196,14 @@ app.post("/api/agent/leads/:id/followup", requireSeller, async (req, res, next) 
   }
 });
 
-app.post("/api/images/generate", async (req, res, next) => {
+app.get("/api/images/jobs", requireSeller, (req, res) => {
+  const limit = Number(req.query.limit) || 20;
+  res.json({ jobs: listImageJobs({ sellerId: req.seller.id, limit }) });
+});
+
+app.post("/api/images/generate", requireSeller, async (req, res, next) => {
   try {
-    res.json(await generateProductImage(req.body));
+    res.json(await generateProductImage({ ...req.body, sellerId: req.seller.id }));
   } catch (error) {
     next(error);
   }

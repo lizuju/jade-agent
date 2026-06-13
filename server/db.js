@@ -95,13 +95,20 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 
 CREATE TABLE IF NOT EXISTS image_jobs (
   id TEXT PRIMARY KEY,
+  seller_id INTEGER,
   prompt TEXT NOT NULL,
   status TEXT NOT NULL,
   image_url TEXT,
   provider TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (seller_id) REFERENCES sellers(id)
 );
 `);
+
+const imageJobColumns = db.prepare("PRAGMA table_info(image_jobs)").all().map((column) => column.name);
+if (!imageJobColumns.includes("seller_id")) {
+  db.prepare("ALTER TABLE image_jobs ADD COLUMN seller_id INTEGER").run();
+}
 
 const encode = (value) => JSON.stringify(value);
 const decode = (value, fallback) => {
@@ -495,8 +502,29 @@ export function listAgentRuns(filter = {}) {
 
 export function recordImageJob(job) {
   db.prepare(
-    "INSERT INTO image_jobs (id, prompt, status, image_url, provider) VALUES (?, ?, ?, ?, ?)"
-  ).run(job.id, job.prompt, job.status, job.imageUrl ?? null, job.provider);
+    "INSERT INTO image_jobs (id, seller_id, prompt, status, image_url, provider) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(job.id, job.sellerId ?? null, job.prompt, job.status, job.imageUrl ?? null, job.provider);
+}
+
+export function listImageJobs(filter = {}) {
+  const rows = db
+    .prepare(
+      `SELECT id, seller_id, prompt, status, image_url, provider, created_at
+       FROM image_jobs
+       WHERE (? IS NULL OR seller_id = ?)
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .all(filter.sellerId ?? null, filter.sellerId ?? null, filter.limit ?? 20);
+  return rows.map((row) => ({
+    id: row.id,
+    sellerId: row.seller_id,
+    prompt: row.prompt,
+    status: row.status,
+    imageUrl: row.image_url,
+    provider: row.provider,
+    createdAt: row.created_at
+  }));
 }
 
 seedDatabase();

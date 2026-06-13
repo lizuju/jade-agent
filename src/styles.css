@@ -883,6 +883,32 @@ button {
   font-size: 12px;
 }
 
+.upload-grid button:disabled {
+  cursor: progress;
+  opacity: 0.76;
+}
+
+.image-job {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #eef8f2;
+}
+
+.image-job strong {
+  color: #087243;
+  font-size: 12px;
+}
+
+.image-job span {
+  overflow: hidden;
+  color: #60766b;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .steps-card {
   display: grid;
   gap: 18px;
@@ -893,6 +919,11 @@ button {
   position: sticky;
   bottom: 16px;
   z-index: 4;
+  margin-top: 18px;
+  box-shadow: 0 12px 24px rgba(7, 135, 79, 0.18);
+}
+
+.publish-action {
   margin-top: 18px;
   box-shadow: 0 12px 24px rgba(7, 135, 79, 0.18);
 }
