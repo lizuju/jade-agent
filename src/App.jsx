@@ -20,7 +20,6 @@ import {
   ShieldCheck,
   Sparkles,
   Store,
-  Tag,
   Trash2,
   User,
   Wand2
@@ -387,7 +386,7 @@ function PublishGuide({ state, setState, go }) {
 
   return (
     <div className="screen">
-      <Header title="发布商品" left={<BackButton go={go} />} right={<span className="saving">AI生成中</span>} />
+      <Header title="发布商品" left={<BackButton go={go} />} right={<span className="saving">{loading ? "AI生成中" : "AI辅助"}</span>} />
       <section className="upload-card">
         <div className="step-title"><span>1.</span><strong>上传商品图片</strong><small>上传清晰的翡翠图片，AI将为您自动生成商品文案</small></div>
         <div className="upload-grid">
@@ -520,7 +519,7 @@ function ProductManagement({ state, go }) {
           </div>
         ))}
       </section>
-      <button className="primary-button fixed-action" onClick={() => go("publish")}>+ 发布新商品</button>
+      <button className="primary-button list-action" onClick={() => go("publish")}>+ 发布新商品</button>
       <BottomNav active="products" go={go} />
     </div>
   );
@@ -580,7 +579,7 @@ function LeadsList({ state, go }) {
       <div className="locked-tip">
         免费商家可查看部分邮箱，升级VIP查看全部
       </div>
-      <button className="primary-button fixed-action" onClick={() => go("account")}>开通VIP，查看全部联系方式</button>
+      <button className="primary-button list-action" onClick={() => go("account")}>开通VIP，查看全部联系方式</button>
       <BottomNav active="leads" go={go} />
     </div>
   );

@@ -36,12 +36,12 @@ button {
   min-height: 100vh;
   align-content: start;
   justify-items: center;
-  padding: 28px;
+  padding: 24px;
 }
 
 .portal-switch {
   display: grid;
-  width: 390px;
+  width: min(430px, calc(100vw - 32px));
   grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-bottom: 12px;
@@ -84,11 +84,12 @@ button {
 }
 
 .phone-frame {
-  width: 390px;
-  height: 844px;
+  width: min(430px, calc(100vw - 32px));
+  height: min(860px, calc(100vh - 118px));
+  min-height: 720px;
   overflow: hidden;
   border: 1px solid rgba(19, 63, 43, 0.14);
-  border-radius: 28px;
+  border-radius: 24px;
   background: #f7fbf8;
   box-shadow: 0 24px 80px rgba(21, 45, 34, 0.18);
 }
@@ -97,7 +98,7 @@ button {
   position: relative;
   height: 100%;
   overflow-y: auto;
-  padding: 14px 14px 88px;
+  padding: 16px 16px 96px;
   background: #f7fbf8;
 }
 
@@ -112,7 +113,7 @@ button {
 }
 
 .with-nav {
-  padding-bottom: 112px;
+  padding-bottom: 126px;
 }
 
 .loading {
@@ -129,7 +130,7 @@ button {
   align-items: center;
   justify-content: space-between;
   height: 42px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .brand {
@@ -264,7 +265,7 @@ button {
 }
 
 .bubble {
-  max-width: 292px;
+  max-width: 316px;
   padding: 10px 12px;
   border: 1px solid #e4ede8;
   border-radius: 8px;
@@ -302,7 +303,7 @@ button {
 
 .quick-tags button {
   width: fit-content;
-  max-width: 286px;
+  max-width: 306px;
   padding: 8px 12px;
   border-radius: 8px;
   color: #52685e;
@@ -342,7 +343,7 @@ button {
 .product-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  gap: 9px;
 }
 
 .product-card {
@@ -364,7 +365,8 @@ button {
 .product-card-body {
   display: grid;
   gap: 4px;
-  padding: 7px;
+  min-height: 78px;
+  padding: 8px;
 }
 
 .product-card-body strong,
@@ -443,16 +445,16 @@ button {
 }
 
 .input-dock {
-  position: sticky;
-  bottom: -76px;
+  position: relative;
   display: grid;
-  grid-template-columns: 1fr 86px;
+  grid-template-columns: minmax(0, 1fr) 90px;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: 16px;
   padding: 12px;
   border: 1px solid #e0ebe5;
   border-radius: 8px;
   background: #fff;
+  box-shadow: 0 12px 28px rgba(24, 67, 44, 0.1);
 }
 
 .input-dock input,
@@ -659,8 +661,8 @@ button {
 
 .metrics-card {
   display: grid;
-  grid-template-columns: 1.2fr 1fr 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
   padding: 16px;
   border-radius: 8px;
   color: #fff;
@@ -679,7 +681,8 @@ button {
 }
 
 .metrics-card strong {
-  font-size: 20px;
+  font-size: 21px;
+  line-height: 1.1;
 }
 
 .vip-badge {
@@ -702,7 +705,7 @@ button {
 
 .quick-actions button {
   display: grid;
-  min-height: 68px;
+  min-height: 72px;
   place-items: center;
   gap: 6px;
   border-radius: 8px;
@@ -745,11 +748,11 @@ button {
 }
 
 .lead-row {
-  grid-template-columns: 56px 1fr 110px;
+  grid-template-columns: 54px minmax(0, 1fr) 96px;
 }
 
 .lead-line {
-  grid-template-columns: 58px minmax(0, 1fr) 48px;
+  grid-template-columns: 58px minmax(0, 1fr) 54px;
 }
 
 .lead-row span,
@@ -779,10 +782,13 @@ button {
 
 .lead-row em,
 .lead-line em {
+  overflow: hidden;
   color: #087243;
   font-size: 10px;
   font-style: normal;
   text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .bottom-nav {
@@ -792,7 +798,8 @@ button {
   bottom: 0;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  height: 72px;
+  z-index: 6;
+  height: 76px;
   padding: 8px 12px 12px;
   border-top: 1px solid #e0ebe5;
   background: rgba(255, 255, 255, 0.96);
@@ -876,8 +883,14 @@ button {
 
 .fixed-action {
   position: sticky;
-  bottom: 14px;
+  bottom: 16px;
+  z-index: 4;
   margin-top: 18px;
+  box-shadow: 0 12px 24px rgba(7, 135, 79, 0.18);
+}
+
+.list-action {
+  margin: 14px 0 0;
 }
 
 .saving {
@@ -950,6 +963,7 @@ button {
 .tabs {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  overflow: hidden;
   margin: 8px 0 12px;
   border-bottom: 1px solid #e0ebe5;
 }
@@ -960,11 +974,13 @@ button {
 
 .tabs button {
   position: relative;
+  min-width: 0;
   min-height: 42px;
   color: #71837a;
   background: transparent;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .tabs button.active {
@@ -985,13 +1001,13 @@ button {
 .product-list,
 .lead-list {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .manage-row {
   position: relative;
   display: grid;
-  grid-template-columns: 72px 1fr 48px;
+  grid-template-columns: 76px minmax(0, 1fr) 54px;
   gap: 10px;
   align-items: center;
   padding: 10px;
@@ -1002,14 +1018,15 @@ button {
 
 .manage-row img,
 .linked-product img {
-  width: 72px;
-  height: 72px;
+  width: 76px;
+  height: 76px;
   border-radius: 8px;
   object-fit: cover;
 }
 
 .manage-row div {
   display: grid;
+  min-width: 0;
   gap: 4px;
 }
 
@@ -1030,10 +1047,12 @@ button {
 }
 
 .row-actions {
-  grid-column: 2 / 4;
+  grid-column: 1 / 4;
   display: flex !important;
   justify-content: flex-end;
   gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #edf2ef;
 }
 
 .row-actions button {
@@ -1219,6 +1238,7 @@ button {
   .phone-frame {
     width: 100vw;
     height: calc(100vh - 66px);
+    min-height: 0;
     border: 0;
     border-radius: 0;
     box-shadow: none;
