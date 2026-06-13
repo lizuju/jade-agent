@@ -156,16 +156,58 @@ function Field({ label, value, onChange, multiline }) {
 function BuyerHome({ state, setState, go }) {
   const [need, setNeed] = useState("预算5万左右，冰种晴底翡翠手镯，55圈口，正圈，无纹裂，送礼");
   const [loading, setLoading] = useState(false);
+  const [messages, setMessages] = useState([
+    {
+      id: "welcome",
+      role: "assistant",
+      text: "您好！请说出您的翡翠需求（预算、品类、尺寸、品相），我将为您精准匹配货源。",
+      time: "10:30"
+    },
+    {
+      id: "seed-user",
+      role: "user",
+      text: "预算5万左右，冰种晴底翡翠手镯，55圈口，正圈，无纹裂，送礼",
+      time: "10:32"
+    },
+    {
+      id: "seed-assistant",
+      role: "assistant",
+      text: "已为您解析需求，正在匹配优质翡翠货源...",
+      time: "10:33"
+    }
+  ]);
   const products = state.match?.products?.length ? state.match.products : state.products.slice(0, 3);
+  const [welcomeMessage, ...conversationMessages] = messages;
 
   async function match() {
+    const text = need.trim();
+    if (!text || loading) return;
+
     setLoading(true);
+    const pendingId = `assistant-${Date.now()}`;
+    setMessages((current) => [
+      ...current,
+      { id: `user-${Date.now()}`, role: "user", text, time: "现在" },
+      { id: pendingId, role: "assistant", text: "已为您解析需求，正在匹配优质翡翠货源...", time: "进行中" }
+    ]);
+
     try {
       const result = await api("/api/agent/buyer-match", {
         method: "POST",
-        body: JSON.stringify({ sessionId: state.sessionId, need, buyerEmail })
+        body: JSON.stringify({ sessionId: state.sessionId, need: text, buyerEmail })
       });
       setState((current) => ({ ...current, sessionId: result.sessionId, match: result, lastTrace: result.trace }));
+      setMessages((current) => current.map((message) => (
+        message.id === pendingId
+          ? { ...message, text: result.reply ?? "已完成匹配，您可以继续补充预算、圈口或瑕疵要求。", time: "刚刚" }
+          : message
+      )));
+    } catch (error) {
+      setMessages((current) => current.map((message) => (
+        message.id === pendingId
+          ? { ...message, text: `匹配失败：${error.message}` }
+          : message
+      )));
     } finally {
       setLoading(false);
     }
@@ -184,8 +226,8 @@ function BuyerHome({ state, setState, go }) {
       <div className="chat">
         <div className="avatar bot"><Sparkles size={18} /></div>
         <div className="bubble">
-          您好！请说出您的翡翠需求（预算、品类、尺寸、品相），我将为您精准匹配货源。
-          <time>10:30</time>
+          {welcomeMessage.text}
+          <time>{welcomeMessage.time}</time>
         </div>
       </div>
 
@@ -195,20 +237,25 @@ function BuyerHome({ state, setState, go }) {
         ))}
       </div>
 
-      <div className="chat user-chat">
-        <div className="bubble user">
-          {need}
-          <time>10:32</time>
-        </div>
-        <div className="avatar user"><User size={17} /></div>
-      </div>
-
-      <div className="chat">
-        <div className="avatar bot"><Sparkles size={18} /></div>
-        <div className="bubble">
-          {loading ? "已为您解析需求，正在匹配优质翡翠货源..." : state.match?.reply ?? "已为您解析需求，正在匹配优质翡翠货源..."}
-        </div>
-      </div>
+      {conversationMessages.map((message) => (
+        message.role === "user" ? (
+          <div className="chat user-chat" key={message.id}>
+            <div className="bubble user">
+              {message.text}
+              <time>{message.time}</time>
+            </div>
+            <div className="avatar user"><User size={17} /></div>
+          </div>
+        ) : (
+          <div className="chat" key={message.id}>
+            <div className="avatar bot"><Sparkles size={18} /></div>
+            <div className="bubble">
+              {message.text}
+              <time>{message.time}</time>
+            </div>
+          </div>
+        )
+      ))}
 
       <section className="card-section">
         <h3>为您找到以下优质货源（共{products.length}件）</h3>
