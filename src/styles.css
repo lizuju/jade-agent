@@ -226,7 +226,7 @@ button {
 
 .topbar-side {
   display: flex;
-  width: 68px;
+  width: 82px;
   align-items: center;
 }
 
@@ -321,6 +321,8 @@ button {
 .edit-form,
 .list-section,
 .lead-detail-card,
+.followup-card,
+.agent-mini,
 .permission-list,
 .plan-card,
 .profile-card,
@@ -335,6 +337,8 @@ button {
 
 .card-section h3,
 .list-section h3,
+.agent-mini h3,
+.followup-card h3,
 .plan-card h3 {
   margin: 0 0 12px;
   font-size: 14px;
@@ -413,6 +417,10 @@ button {
   padding: 12px;
   border-radius: 8px;
   background: #eef8f2;
+}
+
+.agent-trace.compact {
+  padding: 10px;
 }
 
 .agent-trace div,
@@ -946,8 +954,8 @@ button {
 }
 
 .double-actions.bottom {
-  position: sticky;
-  bottom: 12px;
+  position: relative;
+  bottom: auto;
 }
 
 .mini-add {
@@ -1081,11 +1089,47 @@ button {
   margin-top: 8px;
 }
 
-.lead-detail-card p {
+.lead-detail-card p,
+.followup-card p {
   margin: 0;
   color: #1f3328;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.followup-card,
+.agent-mini {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.followup-card small,
+.agent-mini span,
+.agent-mini small {
+  color: #71837a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent-mini strong {
+  color: #087243;
+  font-size: 13px;
+}
+
+.action-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.action-chips span {
+  padding: 5px 8px;
+  border-radius: 8px;
+  color: #087243;
+  background: #e9f6ef;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .linked-product {

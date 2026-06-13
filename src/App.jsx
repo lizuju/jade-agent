@@ -301,7 +301,8 @@ function LoginPage({ go, setState }) {
     const result = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ email, code }) });
     window.localStorage.setItem("sellerToken", result.token);
     const appState = await api("/api/app-state");
-    setState((current) => ({ ...current, ...appState }));
+    const runs = await api("/api/agent/runs");
+    setState((current) => ({ ...current, ...appState, agentRuns: runs.runs }));
     go("dashboard");
   }
 
@@ -330,7 +331,7 @@ function LoginPage({ go, setState }) {
   );
 }
 
-function Dashboard({ state, go }) {
+function Dashboard({ state, setState, go }) {
   return (
     <div className="screen with-nav">
       <Header title={<span>商家后台 <b className="vip-badge">VIP</b></span>} left={<button className="icon-btn"><Menu size={21} /></button>} right={<button className="icon-btn"><Bell size={20} /></button>} />
@@ -348,7 +349,10 @@ function Dashboard({ state, go }) {
       <section className="list-section">
         <div className="section-head"><h3>最近客资</h3><button onClick={() => go("leads")}>全部 <ChevronRight size={14} /></button></div>
         {state.leads.slice(0, 3).map((lead) => (
-          <button className="lead-row" key={lead.id} onClick={() => go("leadDetail")}>
+          <button className="lead-row" key={lead.id} onClick={() => {
+            setState((current) => ({ ...current, selectedLeadId: lead.id }));
+            go("leadDetail");
+          }}>
             <span>{lead.createdAt.slice(5, 16)}</span>
             <div>
               <strong>{lead.buyerNeed}</strong>
@@ -358,6 +362,13 @@ function Dashboard({ state, go }) {
           </button>
         ))}
       </section>
+      {state.agentRuns?.length ? (
+        <section className="agent-mini">
+          <div className="section-head"><h3>Agent运行</h3><small>{state.agentRuns[0].createdAt}</small></div>
+          <strong>{state.agentRuns[0].agentType === "lead_followup" ? "客资跟进 Agent" : "商品发布 Agent"}</strong>
+          <span>{state.agentRuns[0].trace?.[0]?.detail ?? "暂无运行详情"}</span>
+        </section>
+      ) : null}
       <BottomNav active="dashboard" go={go} />
     </div>
   );
@@ -377,7 +388,8 @@ function PublishGuide({ state, setState, go }) {
           images
         })
       });
-      setState((current) => ({ ...current, draft, lastTrace: draft.agentNotes.map((note) => ({ label: note, detail: "发布 agent 已完成" })) }));
+      const runs = await api("/api/agent/runs");
+      setState((current) => ({ ...current, draft, agentRuns: runs.runs, lastTrace: draft.agentNotes.map((note) => ({ label: note, detail: "发布 agent 已完成" })) }));
       go("publishResult");
     } finally {
       setLoading(false);
@@ -554,7 +566,7 @@ function EditProduct({ state, setState, go }) {
   );
 }
 
-function LeadsList({ state, go }) {
+function LeadsList({ state, setState, go }) {
   return (
     <div className="screen with-nav">
       <Header title="客资列表" left={<BackButton go={go} />} />
@@ -565,7 +577,10 @@ function LeadsList({ state, go }) {
       </div>
       <section className="lead-list">
         {state.leads.map((lead) => (
-          <button className="lead-line" key={lead.id} onClick={() => go("leadDetail")}>
+          <button className="lead-line" key={lead.id} onClick={() => {
+            setState((current) => ({ ...current, selectedLeadId: lead.id }));
+            go("leadDetail");
+          }}>
             <span>{lead.createdAt.slice(5, 16)}</span>
             <div>
               <strong>{lead.buyerNeed}</strong>
@@ -586,12 +601,32 @@ function LeadsList({ state, go }) {
 }
 
 function LeadDetail({ state, setState, go }) {
-  const lead = state.leads[0];
+  const [drafting, setDrafting] = useState(false);
+  const lead = state.leads.find((item) => item.id === state.selectedLeadId) ?? state.leads[0];
+  const followup = state.followupByLead?.[lead.id];
+
   async function contact() {
     await api(`/api/leads/${lead.id}/contacted`, { method: "POST", body: "{}" });
     const appState = await api("/api/app-state");
     setState((current) => ({ ...current, ...appState }));
   }
+
+  async function draftFollowup() {
+    setDrafting(true);
+    try {
+      const result = await api(`/api/agent/leads/${lead.id}/followup`, { method: "POST", body: "{}" });
+      const runs = await api("/api/agent/runs");
+      setState((current) => ({
+        ...current,
+        followupByLead: { ...(current.followupByLead ?? {}), [lead.id]: result },
+        agentRuns: runs.runs,
+        lastTrace: result.trace
+      }));
+    } finally {
+      setDrafting(false);
+    }
+  }
+
   return (
     <div className="screen">
       <Header title="客资详情" left={<BackButton go={go} to="leads" />} right={<button className="link-btn" onClick={contact}>标记已联系</button>} />
@@ -610,9 +645,34 @@ function LeadDetail({ state, setState, go }) {
         <span>商家账号</span>
         <strong>{lead.sellerEmail}</strong>
       </section>
+      <section className="followup-card">
+        <div className="section-head">
+          <h3>AI跟进 Agent</h3>
+          <button className="link-btn" onClick={draftFollowup} disabled={drafting}>{drafting ? "生成中" : "生成话术"}</button>
+        </div>
+        {followup ? (
+          <>
+            <p>{followup.reply}</p>
+            <div className="action-chips">
+              {followup.nextActions.map((item) => <span key={item}>{item}</span>)}
+            </div>
+            <div className="agent-trace compact">
+              {followup.trace.map((step) => (
+                <div key={step.label}>
+                  <CheckCircle2 size={15} />
+                  <span>{step.label}</span>
+                  <small>{step.detail}</small>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <small>根据买家需求、商品和商家身份生成可直接发送的跟进话术。</small>
+        )}
+      </section>
       <div className="double-actions bottom">
         <button className="secondary-button">复制邮箱</button>
-        <button className="primary-button" onClick={contact}>标记已联系</button>
+        <button className="primary-button" onClick={draftFollowup} disabled={drafting}>{drafting ? "生成中..." : "AI跟进"}</button>
       </div>
     </div>
   );
@@ -687,13 +747,18 @@ export default function App() {
     metrics: { listedProducts: 0, productQuota: 100, todayLeads: 0, totalLeads: 0 },
     match: null,
     draft: null,
+    agentRuns: [],
+    followupByLead: {},
     lastTrace: []
   });
   const selectedProduct = useMemo(() => state.products[0], [state.products]);
 
   useEffect(() => {
     api("/api/app-state")
-      .then((result) => setState((current) => ({ ...current, ...result })))
+      .then(async (result) => {
+        const runs = result.seller ? await api("/api/agent/runs") : { runs: [] };
+        setState((current) => ({ ...current, ...result, agentRuns: runs.runs }));
+      })
       .finally(() => setReady(true));
   }, []);
 
@@ -705,13 +770,13 @@ export default function App() {
     buyer: <BuyerHome state={state} setState={setState} go={go} />,
     detail: <ProductDetail product={selectedProduct} go={go} setState={setState} />,
     login: <LoginPage go={go} setState={setState} />,
-    dashboard: <Dashboard state={state} go={go} />,
+    dashboard: <Dashboard state={state} setState={setState} go={go} />,
     publish: <PublishGuide state={state} setState={setState} go={go} />,
     publishResult: <PublishResult state={state} go={go} />,
     editInfo: <EditInfo state={state} setState={setState} go={go} />,
     products: <ProductManagement state={state} go={go} />,
     editProduct: <EditProduct state={state} setState={setState} go={go} />,
-    leads: <LeadsList state={state} go={go} />,
+    leads: <LeadsList state={state} setState={setState} go={go} />,
     leadDetail: <LeadDetail state={state} setState={setState} go={go} />,
     account: <AccountPermissions go={go} />,
     profile: <Profile state={state} go={go} />

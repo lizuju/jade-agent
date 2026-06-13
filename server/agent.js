@@ -7,6 +7,7 @@ import { completeText, completeTextResult, getTextProvider } from "./llm.js";
 import {
   addMessage,
   createLead,
+  getSellerLead,
   getOrCreateSession,
   listProducts,
   recordAgentRun,
@@ -39,6 +40,7 @@ function safeJson(text, fallback) {
 }
 
 function textOr(value, fallback) {
+  if (typeof value !== "string" && typeof value !== "number") return fallback;
   const text = String(value ?? "").trim();
   return text || fallback;
 }
@@ -56,7 +58,12 @@ function priceOr(value, fallback) {
 }
 
 function arrayOr(value, fallback) {
-  if (Array.isArray(value)) return value.filter(Boolean);
+  const itemText = (item) => {
+    if (typeof item === "string" || typeof item === "number") return String(item).trim();
+    if (!item || typeof item !== "object") return "";
+    return String(item.action ?? item.flag ?? item.description ?? item.text ?? item.title ?? "").trim();
+  };
+  if (Array.isArray(value)) return value.map(itemText).filter(Boolean);
   if (typeof value === "string" && value.trim()) {
     return value
       .split(/[、,，\s]+/)
@@ -336,6 +343,88 @@ export async function runPublishAgent({ sellerId, hint, notes, images }) {
       agentType: "merchant_publish",
       input: { sellerId, hint: normalizedHint, images: normalizedImages },
       output: { error: publicError(error) },
+      trace,
+      status: "failed"
+    });
+    throw error;
+  }
+}
+
+function localFollowup(lead) {
+  return {
+    buyerSummary: `${lead.buyerNeed}，关注商品：${lead.productTitle}`,
+    reply: `您好，我是${lead.sellerName}。您咨询的「${lead.productTitle}」目前还在，可先为您确认预算、佩戴尺寸和是否需要证书。若方便，我可以发自然光视频和细节图给您参考。`,
+    nextActions: ["确认预算与尺寸", "发送自然光视频", "补充证书和瑕疵说明"],
+    riskFlags: lead.buyerNeed.includes("无纹裂") ? ["重点确认无纹裂和证书信息"] : ["补充自然光图，降低买家疑虑"],
+    tone: "专业、克制、主动推进"
+  };
+}
+
+export async function runLeadFollowupAgent({ sellerId, leadId }) {
+  const runId = randomUUID();
+  const sessionId = `lead-followup-${leadId}`;
+  const lead = getSellerLead(leadId, sellerId);
+  if (!lead) {
+    throw new Error("Lead not found");
+  }
+
+  try {
+    getOrCreateSession(sessionId, "lead_followup", lead.sellerEmail);
+    addMessage(sessionId, "user", lead.buyerNeed, { leadId, sellerId });
+
+    const fallback = localFollowup(lead);
+    const result = await completeTextResult(`你是翡翠商家的客资跟进 agent。请根据买家需求和商品信息生成销售跟进建议，只返回 JSON。
+买家需求：${lead.buyerNeed}
+买家邮箱：${lead.buyerEmail}
+商品：${lead.productTitle}
+价格：${lead.productPrice}
+商家：${lead.sellerName}
+JSON 字段：buyerSummary, reply, nextActions, riskFlags, tone。reply 要像商家可直接发送给买家的中文消息，80到140字。`, { json: true });
+
+    const generated = result.text ? safeJson(result.text, fallback) : fallback;
+    const output = {
+      ...fallback,
+      ...generated,
+      sellerId,
+      leadId: Number(leadId),
+      nextActions: arrayOr(generated.nextActions, fallback.nextActions).slice(0, 4),
+      riskFlags: arrayOr(generated.riskFlags, fallback.riskFlags).slice(0, 3),
+      buyerSummary: textOr(generated.buyerSummary, fallback.buyerSummary),
+      reply: textOr(generated.reply, fallback.reply),
+      tone: textOr(generated.tone, fallback.tone),
+      provider: result.text ? result.provider : "local-rule",
+      providerError: result.text ? undefined : result.error,
+      providerDurationMs: result.durationMs
+    };
+
+    const trace = [
+      { label: "客资读取 Tool", detail: `读取客资 #${lead.id} 与商品「${lead.productTitle}」` },
+      { label: "需求摘要 Agent", detail: output.buyerSummary },
+      { label: "跟进话术 Agent", detail: output.reply },
+      { label: "下一步动作", detail: output.nextActions.join("、") },
+      { label: "模型状态", detail: output.providerError ? `${getTextProvider()} 失败，已使用本地规则：${output.providerError}` : `${output.provider} 正常，耗时 ${output.providerDurationMs}ms` }
+    ];
+
+    addMessage(sessionId, "assistant", output.reply, { leadId, sellerId, output, trace });
+    recordAgentRun({
+      id: runId,
+      sessionId,
+      agentType: "lead_followup",
+      input: { sellerId, leadId },
+      output,
+      trace,
+      status: "completed"
+    });
+
+    return { runId, sessionId, lead, ...output, trace };
+  } catch (error) {
+    const trace = [{ label: "Agent失败", detail: publicError(error) }];
+    recordAgentRun({
+      id: runId,
+      sessionId,
+      agentType: "lead_followup",
+      input: { sellerId, leadId },
+      output: { sellerId, leadId, error: publicError(error) },
       trace,
       status: "failed"
     });

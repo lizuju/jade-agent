@@ -474,6 +474,25 @@ export function recordAgentRun(run) {
   );
 }
 
+export function listAgentRuns(filter = {}) {
+  const rows = db
+    .prepare("SELECT * FROM agent_runs ORDER BY created_at DESC LIMIT ?")
+    .all(filter.limit ?? 20);
+  return rows
+    .map((row) => ({
+      id: row.id,
+      sessionId: row.session_id,
+      agentType: row.agent_type,
+      input: decode(row.input_json, {}),
+      output: decode(row.output_json, {}),
+      trace: decode(row.trace_json, []),
+      status: row.status,
+      createdAt: row.created_at
+    }))
+    .filter((run) => !filter.sellerId || Number(run.input.sellerId ?? run.output.sellerId) === Number(filter.sellerId))
+    .filter((run) => !filter.agentType || run.agentType === filter.agentType);
+}
+
 export function recordImageJob(job) {
   db.prepare(
     "INSERT INTO image_jobs (id, prompt, status, image_url, provider) VALUES (?, ?, ?, ?, ?)"

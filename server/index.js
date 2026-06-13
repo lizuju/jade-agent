@@ -7,6 +7,7 @@ import {
   getProduct,
   getSellerByToken,
   getSellerLead,
+  listAgentRuns,
   listLeads,
   listProducts,
   markLeadContacted,
@@ -17,6 +18,7 @@ import {
 import {
   generateProductImage,
   runBuyerMatchAgent,
+  runLeadFollowupAgent,
   runPublishAgent
 } from "./agent.js";
 
@@ -170,6 +172,23 @@ app.post("/api/agent/publish", requireSeller, async (req, res, next) => {
   try {
     res.json(await runPublishAgent({ ...req.body, sellerId: req.seller.id }));
   } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/agent/runs", requireSeller, (req, res) => {
+  const limit = Number(req.query.limit) || 20;
+  res.json({ runs: listAgentRuns({ sellerId: req.seller.id, limit }) });
+});
+
+app.post("/api/agent/leads/:id/followup", requireSeller, async (req, res, next) => {
+  try {
+    res.json(await runLeadFollowupAgent({ sellerId: req.seller.id, leadId: req.params.id }));
+  } catch (error) {
+    if (error.message === "Lead not found") {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
     next(error);
   }
 });
