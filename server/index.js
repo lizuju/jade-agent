@@ -4,6 +4,7 @@ import {
   createLead,
   createProduct,
   createSellerSession,
+  deleteProduct,
   getProduct,
   getSellerByToken,
   getSellerLead,
@@ -115,6 +116,9 @@ app.get("/api/products/:id", (req, res) => {
 });
 
 app.post("/api/products", requireSeller, (req, res) => {
+  if (!req.body.title || !req.body.category || !req.body.price || !req.body.intro || !req.body.detail) {
+    return res.status(400).json({ error: "Missing required product fields" });
+  }
   res.status(201).json({ product: createProduct({ ...req.body, sellerId: req.seller.id }) });
 });
 
@@ -124,8 +128,14 @@ app.put("/api/products/:id", requireSeller, (req, res) => {
   res.json({ product });
 });
 
+app.delete("/api/products/:id", requireSeller, (req, res) => {
+  const product = deleteProduct(req.params.id, req.seller.id);
+  if (!product) return res.status(404).json({ error: "Product not found" });
+  res.json({ product });
+});
+
 app.get("/api/leads", requireSeller, (req, res) => {
-  res.json({ leads: listLeads(req.seller.id) });
+  res.json({ leads: listLeads(req.seller.id, { status: req.query.status }) });
 });
 
 app.get("/api/leads/:id", requireSeller, (req, res) => {
@@ -135,6 +145,9 @@ app.get("/api/leads/:id", requireSeller, (req, res) => {
 });
 
 app.post("/api/leads", (req, res) => {
+  if (!req.body.productId || !req.body.buyerEmail || !req.body.buyerNeed) {
+    return res.status(400).json({ error: "Missing required lead fields" });
+  }
   const lead = createLead(req.body);
   if (!lead) return res.status(404).json({ error: "Product not found" });
   res.status(201).json({ lead });
@@ -147,11 +160,17 @@ app.post("/api/leads/:id/contacted", requireSeller, (req, res) => {
 });
 
 app.post("/api/auth/otp", (req, res) => {
+  if (!String(req.body.email ?? "").includes("@")) {
+    return res.status(400).json({ error: "Invalid email" });
+  }
   const seller = upsertSeller(req.body.email);
   res.json({ ok: true, seller, code: process.env.NODE_ENV === "production" ? undefined : devOtpCode });
 });
 
 app.post("/api/auth/login", (req, res) => {
+  if (!String(req.body.email ?? "").includes("@")) {
+    return res.status(400).json({ error: "Invalid email" });
+  }
   if (String(req.body.code ?? "") !== devOtpCode) {
     return res.status(401).json({ error: "Invalid code" });
   }
@@ -161,6 +180,14 @@ app.post("/api/auth/login", (req, res) => {
 
 app.get("/api/auth/me", requireSeller, (req, res) => {
   res.json({ seller: req.seller });
+});
+
+app.post("/api/account/renewal", requireSeller, (req, res) => {
+  res.json({
+    ok: true,
+    seller: req.seller,
+    message: "已提交续费咨询，运营将在1个工作日内联系您。"
+  });
 });
 
 app.post("/api/agent/buyer-match", async (req, res, next) => {

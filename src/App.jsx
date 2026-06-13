@@ -34,29 +34,38 @@ const merchantRoutes = new Set(["dashboard", "publish", "publishResult", "editIn
 
 const routeAliases = {
   merchant: "dashboard",
-  "product/1": "detail",
   "publish-result": "publishResult",
-  "edit-publish": "editInfo",
-  "edit-product/1": "editProduct",
-  "lead/1": "leadDetail"
+  "edit-publish": "editInfo"
 };
 
-function normalizeRoute(value) {
-  return routeAliases[value] ?? value;
+function parseRoute(value) {
+  const raw = routeAliases[value] ?? value;
+  const [name, id] = raw.split("/");
+  const numericId = Number(id);
+  if (name === "product" && Number.isFinite(numericId)) {
+    return { route: "detail", selectedProductId: numericId };
+  }
+  if (name === "edit-product" && Number.isFinite(numericId)) {
+    return { route: "editProduct", selectedProductId: numericId };
+  }
+  if (name === "lead" && Number.isFinite(numericId)) {
+    return { route: "leadDetail", selectedLeadId: numericId };
+  }
+  return { route: raw };
 }
 
 function useHashRoute() {
-  const [route, setRoute] = useState(() => normalizeRoute(window.location.hash.replace("#", "") || "buyer"));
+  const [routeInfo, setRouteInfo] = useState(() => parseRoute(window.location.hash.replace("#", "") || "buyer"));
   useEffect(() => {
-    const onHash = () => setRoute(normalizeRoute(window.location.hash.replace("#", "") || "buyer"));
+    const onHash = () => setRouteInfo(parseRoute(window.location.hash.replace("#", "") || "buyer"));
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   const go = (key) => {
     window.location.hash = key;
-    setRoute(normalizeRoute(key));
+    setRouteInfo(parseRoute(key));
   };
-  return [route, go];
+  return [routeInfo, go];
 }
 
 function PortalSwitch({ route, go }) {
@@ -124,9 +133,9 @@ function agentLabel(type) {
   return "商品发布 Agent";
 }
 
-function ProductCard({ product, go }) {
+function ProductCard({ product, onOpen }) {
   return (
-    <button className="product-card" onClick={() => go("detail")}>
+    <button className="product-card" onClick={onOpen}>
       <img src={product.images[0]} alt={product.title} />
       <div className="product-card-body">
         <strong>{product.title}</strong>
@@ -156,6 +165,7 @@ function Field({ label, value, onChange, multiline }) {
 function BuyerHome({ state, setState, go }) {
   const [need, setNeed] = useState("预算5万左右，冰种晴底翡翠手镯，55圈口，正圈，无纹裂，送礼");
   const [loading, setLoading] = useState(false);
+  const [thinkingDotCount, setThinkingDotCount] = useState(1);
   const [messages, setMessages] = useState([
     {
       id: "welcome",
@@ -172,23 +182,39 @@ function BuyerHome({ state, setState, go }) {
     {
       id: "seed-assistant",
       role: "assistant",
-      text: "已为您解析需求，正在匹配优质翡翠货源...",
+      text: "已为您解析需求，正在匹配优质翡翠货源.",
       time: "10:33"
     }
   ]);
-  const products = state.match?.products?.length ? state.match.products : state.products.slice(0, 3);
+  const listedProducts = state.products.filter((product) => product.status === "listed");
+  const products = state.match?.products?.length ? state.match.products : listedProducts.slice(0, 3);
   const [welcomeMessage, ...conversationMessages] = messages;
+  const isThinking = loading || messages.some((message) => message.thinking);
+  const thinkingText = `已为您解析需求，正在匹配优质翡翠货源${".".repeat(thinkingDotCount)}`;
+
+  useEffect(() => {
+    if (!isThinking) {
+      setThinkingDotCount(1);
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      setThinkingDotCount((count) => (count === 3 ? 1 : count + 1));
+    }, 450);
+
+    return () => window.clearInterval(timer);
+  }, [isThinking]);
 
   async function match() {
     const text = need.trim();
-    if (!text || loading) return;
+    if (!text || isThinking) return;
 
     setLoading(true);
     const pendingId = `assistant-${Date.now()}`;
     setMessages((current) => [
       ...current,
       { id: `user-${Date.now()}`, role: "user", text, time: "现在" },
-      { id: pendingId, role: "assistant", text: "已为您解析需求，正在匹配优质翡翠货源...", time: "进行中" }
+      { id: pendingId, role: "assistant", text: "已为您解析需求，正在匹配优质翡翠货源.", time: "进行中", thinking: true }
     ]);
 
     try {
@@ -199,13 +225,13 @@ function BuyerHome({ state, setState, go }) {
       setState((current) => ({ ...current, sessionId: result.sessionId, match: result, lastTrace: result.trace }));
       setMessages((current) => current.map((message) => (
         message.id === pendingId
-          ? { ...message, text: result.reply ?? "已完成匹配，您可以继续补充预算、圈口或瑕疵要求。", time: "刚刚" }
+          ? { ...message, text: result.reply ?? "已完成匹配，您可以继续补充预算、圈口或瑕疵要求。", time: "刚刚", thinking: false }
           : message
       )));
     } catch (error) {
       setMessages((current) => current.map((message) => (
         message.id === pendingId
-          ? { ...message, text: `匹配失败：${error.message}` }
+          ? { ...message, text: `匹配失败：${error.message}`, thinking: false }
           : message
       )));
     } finally {
@@ -214,7 +240,7 @@ function BuyerHome({ state, setState, go }) {
   }
 
   return (
-    <div className="screen">
+    <div className="screen buyer-screen">
       <div className="brandbar">
         <div className="brand">
           <span className="logo-mark">翠</span>
@@ -223,64 +249,75 @@ function BuyerHome({ state, setState, go }) {
         <button className="pill-button" onClick={() => go("login")}>商家入驻</button>
       </div>
 
-      <div className="chat">
-        <div className="avatar bot"><Sparkles size={18} /></div>
-        <div className="bubble">
-          {welcomeMessage.text}
-          <time>{welcomeMessage.time}</time>
-        </div>
-      </div>
-
-      <div className="quick-tags">
-        {["10万预算 帝王绿手镯 55圈口 微瑕", "冰种平安扣 预算2万 无纹无裂", "冰种晴底吊坠 送礼自用均可"].map((text) => (
-          <button key={text} onClick={() => setNeed(text)}>{text}</button>
-        ))}
-      </div>
-
-      {conversationMessages.map((message) => (
-        message.role === "user" ? (
-          <div className="chat user-chat" key={message.id}>
-            <div className="bubble user">
-              {message.text}
-              <time>{message.time}</time>
-            </div>
-            <div className="avatar user"><User size={17} /></div>
+      <div className="buyer-scroll">
+        <div className="chat">
+          <div className="avatar bot"><Sparkles size={18} /></div>
+          <div className="bubble">
+            {welcomeMessage.text}
+            <time>{welcomeMessage.time}</time>
           </div>
-        ) : (
-          <div className="chat" key={message.id}>
-            <div className="avatar bot"><Sparkles size={18} /></div>
-            <div className="bubble">
-              {message.text}
-              <time>{message.time}</time>
-            </div>
-          </div>
-        )
-      ))}
-
-      <section className="card-section">
-        <h3>为您找到以下优质货源（共{products.length}件）</h3>
-        <div className="product-grid">
-          {products.map((product) => <ProductCard key={product.id} product={product} go={go} />)}
         </div>
-      </section>
 
-      {state.match?.trace ? (
-        <section className="agent-trace">
-          {state.match.trace.map((step) => (
-            <div key={step.label}>
-              <CheckCircle2 size={15} />
-              <span>{step.label}</span>
-              <small>{step.detail}</small>
-            </div>
+        <div className="quick-tags">
+          {["10万预算 帝王绿手镯 55圈口 微瑕", "冰种平安扣 预算2万 无纹无裂", "冰种晴底吊坠 送礼自用均可"].map((text) => (
+            <button key={text} onClick={() => setNeed(text)}>{text}</button>
           ))}
+        </div>
+
+        {conversationMessages.map((message) => (
+          message.role === "user" ? (
+            <div className="chat user-chat" key={message.id}>
+              <div className="bubble user">
+                {message.text}
+                <time>{message.time}</time>
+              </div>
+              <div className="avatar user"><User size={17} /></div>
+            </div>
+          ) : (
+            <div className="chat" key={message.id}>
+              <div className="avatar bot"><Sparkles size={18} /></div>
+              <div className="bubble">
+                {message.thinking ? thinkingText : message.text}
+                <time>{message.time}</time>
+              </div>
+            </div>
+          )
+        ))}
+
+        <section className="card-section">
+          <h3>为您找到以下优质货源（共{products.length}件）</h3>
+          <div className="product-grid">
+            {products.map((product) => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                onOpen={() => {
+                  setState((current) => ({ ...current, selectedProductId: product.id }));
+                  go(`product/${product.id}`);
+                }}
+              />
+            ))}
+          </div>
         </section>
-      ) : null}
+
+        {state.match?.trace ? (
+          <section className="agent-trace">
+            {state.match.trace.map((step) => (
+              <div key={step.label}>
+                <CheckCircle2 size={15} />
+                <span>{step.label}</span>
+                <small>{step.detail}</small>
+              </div>
+            ))}
+          </section>
+        ) : null}
+      </div>
 
       <div className="input-dock">
         <input value={need} onChange={(event) => setNeed(event.target.value)} placeholder="请输入您的翡翠需求，支持中文、英文等语言" />
-        <button onClick={match} disabled={loading}>
+        <button onClick={match} disabled={isThinking}>
           <Send size={16} />
-          AI匹配
+          {isThinking ? "思考中" : "AI匹配"}
         </button>
       </div>
     </div>
@@ -290,25 +327,56 @@ function BuyerHome({ state, setState, go }) {
 function ProductDetail({ product, go, setState }) {
   const [email, setEmail] = useState(buyerEmail);
   const [sent, setSent] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [shareLink, setShareLink] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  async function shareProduct() {
+    const link = `${window.location.origin}${window.location.pathname}#product/${product.id}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setShareLink("");
+      setNotice("");
+    } catch (error) {
+      setCopied(false);
+      setShareLink(link);
+      setNotice("复制失败，请手动复制下方链接。");
+    }
+  }
 
   async function submitLead() {
-    await api("/api/leads", {
-      method: "POST",
-      body: JSON.stringify({
-        productId: product.id,
-        buyerEmail: email,
-        buyerNeed: "从商品详情页咨询：" + product.title,
-        source: "product_detail"
-      })
-    });
-    const appState = await api("/api/app-state");
-    setState((current) => ({ ...current, ...appState }));
-    setSent(true);
+    if (submitting || sent) return;
+    if (!email.includes("@")) {
+      setNotice("请输入有效邮箱，方便卖家联系您。");
+      return;
+    }
+    setSubmitting(true);
+    setNotice("");
+    try {
+      await api("/api/leads", {
+        method: "POST",
+        body: JSON.stringify({
+          productId: product.id,
+          buyerEmail: email,
+          buyerNeed: "从商品详情页咨询：" + product.title,
+          source: "product_detail"
+        })
+      });
+      const appState = await api("/api/app-state");
+      setState((current) => ({ ...current, ...appState }));
+      setSent(true);
+    } catch (error) {
+      setNotice(`提交失败：${error.message}`);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
     <div className="screen">
-      <Header title="商品详情" left={<BackButton go={go} to="buyer" />} right={<button className="icon-btn"><Share2 size={20} /></button>} />
+      <Header title="商品详情" left={<BackButton go={go} to="buyer" />} right={<button className="icon-btn" onClick={shareProduct} aria-label="分享商品"><Share2 size={20} /></button>} />
       <div className="hero-image">
         <img src={product.images[0]} alt={product.title} />
         <span>1/5</span>
@@ -332,7 +400,10 @@ function ProductDetail({ product, go, setState }) {
           联系卖家（留下邮箱，卖家将主动联系您）
           <input value={email} onChange={(event) => setEmail(event.target.value)} />
         </label>
-        <button className="primary-button" onClick={submitLead}>{sent ? "已提交，等待商家联系" : "提交意向，等待卖家联系"}</button>
+        <button className="primary-button" onClick={submitLead} disabled={submitting || sent}>{submitting ? "提交中..." : sent ? "已提交，等待商家联系" : "提交意向，等待卖家联系"}</button>
+        {copied ? <small>商品链接已复制</small> : null}
+        {notice ? <div className="notice-card error">{notice}</div> : null}
+        {shareLink ? <div className="copy-link">{shareLink}</div> : null}
         <small>我们将严格保护隐私，仅用于卖家联系您</small>
       </div>
     </div>
@@ -343,20 +414,47 @@ function LoginPage({ go, setState }) {
   const [email, setEmail] = useState(sellerEmail);
   const [code, setCode] = useState("");
   const [sent, setSent] = useState(false);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [notice, setNotice] = useState("");
 
   async function requestCode() {
-    const result = await api("/api/auth/otp", { method: "POST", body: JSON.stringify({ email }) });
-    setCode(result.code ?? "");
-    setSent(true);
+    if (!email.includes("@")) {
+      setNotice("请输入有效邮箱地址。");
+      return;
+    }
+    setOtpLoading(true);
+    setNotice("");
+    try {
+      const result = await api("/api/auth/otp", { method: "POST", body: JSON.stringify({ email }) });
+      setCode(result.code ?? "");
+      setSent(true);
+    } catch (error) {
+      setNotice(`验证码发送失败：${error.message}`);
+    } finally {
+      setOtpLoading(false);
+    }
   }
 
   async function login() {
-    const result = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ email, code }) });
-    window.localStorage.setItem("sellerToken", result.token);
-    const appState = await api("/api/app-state");
-    const runs = await api("/api/agent/runs");
-    setState((current) => ({ ...current, ...appState, agentRuns: runs.runs }));
-    go("dashboard");
+    if (!email.includes("@") || !code.trim()) {
+      setNotice("请输入邮箱和验证码。");
+      return;
+    }
+    setLoginLoading(true);
+    setNotice("");
+    try {
+      const result = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ email, code }) });
+      window.localStorage.setItem("sellerToken", result.token);
+      const appState = await api("/api/app-state");
+      const runs = await api("/api/agent/runs");
+      setState((current) => ({ ...current, ...appState, agentRuns: runs.runs }));
+      go("dashboard");
+    } catch (error) {
+      setNotice(`登录失败：${error.message}`);
+    } finally {
+      setLoginLoading(false);
+    }
   }
 
   return (
@@ -369,9 +467,10 @@ function LoginPage({ go, setState }) {
       </div>
       <div className="login-form">
         <label><Mail size={18} /><input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="请输入您的邮箱地址" /></label>
-        <button className="primary-button" onClick={requestCode}>{sent ? "验证码已发送" : "获取验证码"}</button>
+        <button className="primary-button" onClick={requestCode} disabled={otpLoading}>{otpLoading ? "发送中..." : sent ? "验证码已发送" : "获取验证码"}</button>
         <label><ShieldCheck size={18} /><input value={code} onChange={(event) => setCode(event.target.value)} placeholder="请输入验证码" /></label>
-        <button className="primary-button" onClick={login}>登录 / 注册</button>
+        <button className="primary-button" onClick={login} disabled={loginLoading}>{loginLoading ? "登录中..." : "登录 / 注册"}</button>
+        {notice ? <div className="notice-card error">{notice}</div> : null}
       </div>
       <div className="login-benefits">
         <span><Mail size={18} />优质商机</span>
@@ -387,7 +486,7 @@ function LoginPage({ go, setState }) {
 function Dashboard({ state, setState, go }) {
   return (
     <div className="screen with-nav">
-      <Header title={<span>商家后台 <b className="vip-badge">VIP</b></span>} left={<button className="icon-btn"><Menu size={21} /></button>} right={<button className="icon-btn"><Bell size={20} /></button>} />
+      <Header title={<span>商家后台 <b className="vip-badge">VIP</b></span>} left={<button className="icon-btn" onClick={() => go("profile")} aria-label="个人中心"><Menu size={21} /></button>} right={<button className="icon-btn" onClick={() => go("leads")} aria-label="客资通知"><Bell size={20} /></button>} />
       <section className="metrics-card">
         <div><span>商品数量</span><strong>{state.metrics.listedProducts} / {state.metrics.productQuota}</strong><small>已上架 / 上限</small></div>
         <div><span>今日客资</span><strong>{state.metrics.todayLeads}</strong><small>条</small></div>
@@ -404,7 +503,7 @@ function Dashboard({ state, setState, go }) {
         {state.leads.slice(0, 3).map((lead) => (
           <button className="lead-row" key={lead.id} onClick={() => {
             setState((current) => ({ ...current, selectedLeadId: lead.id }));
-            go("leadDetail");
+            go(`lead/${lead.id}`);
           }}>
             <span>{lead.createdAt.slice(5, 16)}</span>
             <div>
@@ -430,11 +529,14 @@ function Dashboard({ state, setState, go }) {
 function PublishGuide({ state, setState, go }) {
   const [loading, setLoading] = useState(false);
   const [imageLoading, setImageLoading] = useState(false);
+  const [notice, setNotice] = useState("");
   const [images, setImages] = useState(state.publishImages?.length ? state.publishImages : ["/assets/jade-upload-bangle.jpg", "/assets/jade-pendant.jpg"]);
   const imagePrompt = "冰种晴底翡翠手镯，55圈口，黑色岩石背景，商业珠宝摄影，真实自然光，高端电商主图";
 
   async function generateImage() {
+    if (imageLoading) return;
     setImageLoading(true);
+    setNotice("");
     try {
       const image = await api("/api/images/generate", {
         method: "POST",
@@ -454,13 +556,17 @@ function PublishGuide({ state, setState, go }) {
           { label: "素材入库", detail: `image_jobs：${image.status}` }
         ]
       }));
+    } catch (error) {
+      setNotice(`图片生成失败：${error.message}`);
     } finally {
       setImageLoading(false);
     }
   }
 
   async function generateDraft() {
+    if (loading || imageLoading) return;
     setLoading(true);
+    setNotice("");
     try {
       const draft = await api("/api/agent/publish", {
         method: "POST",
@@ -472,6 +578,8 @@ function PublishGuide({ state, setState, go }) {
       const runs = await api("/api/agent/runs");
       setState((current) => ({ ...current, draft, agentRuns: runs.runs, lastTrace: draft.agentNotes.map((note) => ({ label: note, detail: "发布 agent 已完成" })) }));
       go("publishResult");
+    } catch (error) {
+      setNotice(`AI生成失败：${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -492,6 +600,7 @@ function PublishGuide({ state, setState, go }) {
             <span>{state.imageJobs[0].status} · {state.imageJobs[0].prompt}</span>
           </div>
         ) : null}
+        {notice ? <div className="notice-card error">{notice}</div> : null}
       </section>
       <section className="steps-card">
         {[
@@ -505,7 +614,7 @@ function PublishGuide({ state, setState, go }) {
           </div>
         ))}
       </section>
-      <button className="primary-button publish-action" onClick={generateDraft} disabled={loading}>
+      <button className="primary-button publish-action" onClick={generateDraft} disabled={loading || imageLoading}>
         <Wand2 size={18} />
         {loading ? "AI正在生成..." : "AI生成商品信息"}
       </button>
@@ -558,51 +667,99 @@ function ReadOnlyField({ label, value, multiline }) {
 
 function EditInfo({ state, setState, go }) {
   const [draft, setDraft] = useState(state.draft ?? state.products[0]);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
   const set = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
 
+  function addTag() {
+    const tag = window.prompt("请输入商品标签");
+    if (!tag) return;
+    setDraft((current) => ({ ...current, tags: Array.from(new Set([...current.tags, tag.trim()].filter(Boolean))) }));
+  }
+
   async function publish() {
-    const result = await api("/api/products", {
-      method: "POST",
-      body: JSON.stringify({ ...draft, status: "listed" })
-    });
-    const appState = await api("/api/app-state");
-    setState((current) => ({ ...current, ...appState, selectedProductId: result.product.id }));
-    go("products");
+    if (saving) return;
+    setSaving(true);
+    setNotice("");
+    try {
+      const result = await api("/api/products", {
+        method: "POST",
+        body: JSON.stringify({ ...draft, status: "listed" })
+      });
+      const appState = await api("/api/app-state");
+      setState((current) => ({ ...current, ...appState, selectedProductId: result.product.id }));
+      go("products");
+    } catch (error) {
+      setNotice(`发布失败：${error.message}`);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <div className="screen">
-      <Header title="编辑商品信息" left={<BackButton go={go} to="publishResult" />} right={<button className="link-btn" onClick={publish}>保存</button>} />
+      <Header title="编辑商品信息" left={<BackButton go={go} to="publishResult" />} right={<button className="link-btn" onClick={publish} disabled={saving}>{saving ? "保存中" : "保存"}</button>} />
       <section className="edit-form">
         <Field label="商品标题" value={draft.title} onChange={(value) => set("title", value)} />
         <Field label="商品简介" value={draft.intro} onChange={(value) => set("intro", value)} />
         <Field label="商品详情" value={draft.detail} onChange={(value) => set("detail", value)} multiline />
-        <label className="field"><span>商品标签</span><div className="tags-row wrap">{draft.tags.map((tag) => <Chip key={tag} active>{tag}</Chip>)}<button className="mini-add">+ 添加标签</button></div></label>
+        <label className="field"><span>商品标签</span><div className="tags-row wrap">{draft.tags.map((tag) => <Chip key={tag} active>{tag}</Chip>)}<button type="button" className="mini-add" onClick={addTag}>+ 添加标签</button></div></label>
         <Field label="预估售价（元）" value={String(draft.price)} onChange={(value) => set("price", Number(value) || 0)} />
+        {notice ? <div className="notice-card error">{notice}</div> : null}
       </section>
-      <button className="primary-button fixed-action" onClick={publish}>确认发布</button>
+      <button className="primary-button fixed-action" onClick={publish} disabled={saving}>{saving ? "发布中..." : "确认发布"}</button>
     </div>
   );
 }
 
-function ProductManagement({ state, go }) {
+function ProductManagement({ state, setState, go }) {
+  const [filter, setFilter] = useState("all");
+  const [deletingId, setDeletingId] = useState(null);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
+  const [notice, setNotice] = useState("");
   const counts = {
     all: state.products.length,
     listed: state.products.filter((product) => product.status === "listed").length,
     draft: state.products.filter((product) => product.status === "draft").length,
     unlisted: state.products.filter((product) => product.status === "unlisted").length
   };
+  const visibleProducts = filter === "all" ? state.products : state.products.filter((product) => product.status === filter);
+  const tabs = [
+    ["all", `全部(${counts.all})`],
+    ["listed", `已上架(${counts.listed})`],
+    ["draft", `草稿(${counts.draft})`],
+    ["unlisted", `已下架(${counts.unlisted})`]
+  ];
+
+  async function removeProduct(product) {
+    setDeletingId(product.id);
+    setNotice("");
+    try {
+      await api(`/api/products/${product.id}`, { method: "DELETE" });
+      const appState = await api("/api/app-state");
+      setState((current) => ({
+        ...current,
+        ...appState,
+        selectedProductId: current.selectedProductId === product.id ? appState.products[0]?.id : current.selectedProductId
+      }));
+      setConfirmingDeleteId(null);
+    } catch (error) {
+      setNotice(`删除失败：${error.message}`);
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <div className="screen with-nav">
       <Header title="商品管理" left={<BackButton go={go} />} />
       <div className="tabs">
-        <button className="active">全部({counts.all})</button>
-        <button>已上架({counts.listed})</button>
-        <button>草稿({counts.draft})</button>
-        <button>已下架({counts.unlisted})</button>
+        {tabs.map(([key, label]) => (
+          <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key)}>{label}</button>
+        ))}
       </div>
       <section className="product-list">
-        {state.products.map((product) => (
+        {visibleProducts.map((product) => (
           <div className="manage-row" key={product.id}>
             <img src={product.images[0]} alt={product.title} />
             <div>
@@ -612,11 +769,23 @@ function ProductManagement({ state, go }) {
             </div>
             <span className={product.status === "listed" ? "status listed" : "status"}>{product.status === "listed" ? "已上架" : product.status === "draft" ? "草稿" : "已下架"}</span>
             <div className="row-actions">
-              <button onClick={() => go("editProduct")}><Edit3 size={14} />编辑</button>
-              <button><Trash2 size={14} />删除</button>
+              <button onClick={() => {
+                setState((current) => ({ ...current, selectedProductId: product.id }));
+                go(`edit-product/${product.id}`);
+              }}><Edit3 size={14} />编辑</button>
+              <button onClick={() => setConfirmingDeleteId(product.id)} disabled={deletingId === product.id}><Trash2 size={14} />删除</button>
             </div>
+            {confirmingDeleteId === product.id ? (
+              <div className="row-confirm">
+                <span>删除后买家端不再展示该商品</span>
+                <button type="button" onClick={() => setConfirmingDeleteId(null)} disabled={deletingId === product.id}>取消</button>
+                <button type="button" onClick={() => removeProduct(product)} disabled={deletingId === product.id}>{deletingId === product.id ? "删除中" : "确认删除"}</button>
+              </div>
+            ) : null}
           </div>
         ))}
+        {!visibleProducts.length ? <div className="empty-state">当前分类暂无商品</div> : null}
+        {notice ? <div className="notice-card error">{notice}</div> : null}
       </section>
       <button className="primary-button list-action" onClick={() => go("publish")}>+ 发布新商品</button>
       <BottomNav active="products" go={go} />
@@ -625,48 +794,130 @@ function ProductManagement({ state, go }) {
 }
 
 function EditProduct({ state, setState, go }) {
-  const [draft, setDraft] = useState(state.products[0]);
+  const selected = state.products.find((product) => product.id === state.selectedProductId) ?? state.products[0];
+  const [draft, setDraft] = useState(selected);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [notice, setNotice] = useState("");
   const set = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
 
+  useEffect(() => {
+    if (selected) setDraft(selected);
+  }, [selected?.id]);
+
   async function save() {
-    await api(`/api/products/${draft.id}`, { method: "PUT", body: JSON.stringify(draft) });
-    const appState = await api("/api/app-state");
-    setState((current) => ({ ...current, ...appState }));
-    go("products");
+    if (saving) return;
+    setSaving(true);
+    setNotice("");
+    try {
+      await api(`/api/products/${draft.id}`, { method: "PUT", body: JSON.stringify(draft) });
+      const appState = await api("/api/app-state");
+      setState((current) => ({ ...current, ...appState }));
+      go("products");
+    } catch (error) {
+      setNotice(`保存失败：${error.message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    setDeleting(true);
+    setNotice("");
+    try {
+      await api(`/api/products/${draft.id}`, { method: "DELETE" });
+      const appState = await api("/api/app-state");
+      setState((current) => ({ ...current, ...appState, selectedProductId: appState.products[0]?.id }));
+      go("products");
+    } catch (error) {
+      setNotice(`删除失败：${error.message}`);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  if (!draft) {
+    return (
+      <div className="screen">
+        <Header title="编辑商品" left={<BackButton go={go} to="products" />} />
+        <div className="empty-state">暂无可编辑商品</div>
+      </div>
+    );
   }
 
   return (
     <div className="screen">
-      <Header title="编辑商品" left={<BackButton go={go} to="products" />} right={<button className="danger-link">删除</button>} />
+      <Header title="编辑商品" left={<BackButton go={go} to="products" />} right={<button className="danger-link" onClick={() => setConfirmingDelete(true)} disabled={deleting}>{deleting ? "删除中" : "删除"}</button>} />
       <div className="hero-image compact">
         <img src={draft.images[0]} alt={draft.title} />
         <span>1/3</span>
       </div>
+      {confirmingDelete ? (
+        <section className="notice-card danger">
+          <strong>确认删除该商品？</strong>
+          <span>删除后买家端不再展示该商品，已有客资记录会保留。</span>
+          <div className="confirm-actions">
+            <button type="button" onClick={() => setConfirmingDelete(false)} disabled={deleting}>取消</button>
+            <button type="button" onClick={remove} disabled={deleting}>{deleting ? "删除中" : "确认删除"}</button>
+          </div>
+        </section>
+      ) : null}
       <section className="edit-form">
         <Field label="商品标题" value={draft.title} onChange={(value) => set("title", value)} />
         <Field label="商品卖点" value={draft.intro} onChange={(value) => set("intro", value)} />
         <Field label="商品详情" value={draft.detail} onChange={(value) => set("detail", value)} multiline />
         <Field label="预估售价（元）" value={String(draft.price)} onChange={(value) => set("price", Number(value) || 0)} />
+        {notice ? <div className="notice-card error">{notice}</div> : null}
       </section>
-      <button className="primary-button fixed-action" onClick={save}>保存修改</button>
+      <button className="primary-button fixed-action" onClick={save} disabled={saving || deleting}>{saving ? "保存中..." : "保存修改"}</button>
     </div>
   );
 }
 
 function LeadsList({ state, setState, go }) {
+  const [filter, setFilter] = useState("all");
+  const [filteredLeads, setFilteredLeads] = useState(state.leads);
+  const [filtering, setFiltering] = useState(false);
+  const [notice, setNotice] = useState("");
+  const tabs = [
+    ["all", "全部"],
+    ["new", "待联系"],
+    ["contacted", "已联系"]
+  ];
+
+  useEffect(() => {
+    setFilteredLeads(filter === "all" ? state.leads : state.leads.filter((lead) => lead.status === filter));
+  }, [filter, state.leads]);
+
+  async function selectFilter(nextFilter) {
+    setFilter(nextFilter);
+    const query = nextFilter === "all" ? "" : `?status=${nextFilter}`;
+    setFiltering(true);
+    setNotice("");
+    try {
+      const result = await api(`/api/leads${query}`);
+      setFilteredLeads(result.leads);
+    } catch (error) {
+      setNotice(`筛选失败：${error.message}`);
+    } finally {
+      setFiltering(false);
+    }
+  }
+
   return (
     <div className="screen with-nav">
       <Header title="客资列表" left={<BackButton go={go} />} />
       <div className="tabs three">
-        <button className="active">全部</button>
-        <button>待联系</button>
-        <button>已联系</button>
+        {tabs.map(([key, label]) => (
+          <button key={key} className={filter === key ? "active" : ""} onClick={() => selectFilter(key)} disabled={filtering}>{label}</button>
+        ))}
       </div>
       <section className="lead-list">
-        {state.leads.map((lead) => (
+        {filteredLeads.map((lead) => (
           <button className="lead-line" key={lead.id} onClick={() => {
             setState((current) => ({ ...current, selectedLeadId: lead.id }));
-            go("leadDetail");
+            go(`lead/${lead.id}`);
           }}>
             <span>{lead.createdAt.slice(5, 16)}</span>
             <div>
@@ -677,6 +928,8 @@ function LeadsList({ state, setState, go }) {
             <small>{maskEmail(lead.buyerEmail)}</small>
           </button>
         ))}
+        {!filteredLeads.length ? <div className="empty-state">当前分类暂无客资</div> : null}
+        {notice ? <div className="notice-card error">{notice}</div> : null}
       </section>
       <div className="locked-tip">
         免费商家可查看部分邮箱，升级VIP查看全部
@@ -689,17 +942,49 @@ function LeadsList({ state, setState, go }) {
 
 function LeadDetail({ state, setState, go }) {
   const [drafting, setDrafting] = useState(false);
+  const [contacting, setContacting] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [notice, setNotice] = useState("");
   const lead = state.leads.find((item) => item.id === state.selectedLeadId) ?? state.leads[0];
+  if (!lead) {
+    return (
+      <div className="screen">
+        <Header title="客资详情" left={<BackButton go={go} to="leads" />} />
+        <div className="empty-state">暂无客资详情</div>
+      </div>
+    );
+  }
   const followup = state.followupByLead?.[lead.id];
 
   async function contact() {
-    await api(`/api/leads/${lead.id}/contacted`, { method: "POST", body: "{}" });
-    const appState = await api("/api/app-state");
-    setState((current) => ({ ...current, ...appState }));
+    if (contacting) return;
+    setContacting(true);
+    setNotice("");
+    try {
+      await api(`/api/leads/${lead.id}/contacted`, { method: "POST", body: "{}" });
+      const appState = await api("/api/app-state");
+      setState((current) => ({ ...current, ...appState }));
+    } catch (error) {
+      setNotice(`标记失败：${error.message}`);
+    } finally {
+      setContacting(false);
+    }
+  }
+
+  async function copyEmail() {
+    try {
+      await navigator.clipboard.writeText(lead.buyerEmail);
+      setCopied(true);
+      setNotice("");
+    } catch (error) {
+      setNotice(`复制失败：${error.message}`);
+    }
   }
 
   async function draftFollowup() {
+    if (drafting) return;
     setDrafting(true);
+    setNotice("");
     try {
       const result = await api(`/api/agent/leads/${lead.id}/followup`, { method: "POST", body: "{}" });
       const runs = await api("/api/agent/runs");
@@ -709,6 +994,8 @@ function LeadDetail({ state, setState, go }) {
         agentRuns: runs.runs,
         lastTrace: result.trace
       }));
+    } catch (error) {
+      setNotice(`生成失败：${error.message}`);
     } finally {
       setDrafting(false);
     }
@@ -716,7 +1003,7 @@ function LeadDetail({ state, setState, go }) {
 
   return (
     <div className="screen">
-      <Header title="客资详情" left={<BackButton go={go} to="leads" />} right={<button className="link-btn" onClick={contact}>标记已联系</button>} />
+      <Header title="客资详情" left={<BackButton go={go} to="leads" />} right={<button className="link-btn" onClick={contact} disabled={contacting}>{contacting ? "标记中" : "标记已联系"}</button>} />
       <section className="lead-detail-card">
         <span>留言时间</span>
         <strong>{lead.createdAt}</strong>
@@ -732,6 +1019,7 @@ function LeadDetail({ state, setState, go }) {
         <span>商家账号</span>
         <strong>{lead.sellerEmail}</strong>
       </section>
+      {notice ? <div className="notice-card error">{notice}</div> : null}
       <section className="followup-card">
         <div className="section-head">
           <h3>AI跟进 Agent</h3>
@@ -758,7 +1046,7 @@ function LeadDetail({ state, setState, go }) {
         )}
       </section>
       <div className="double-actions bottom">
-        <button className="secondary-button">复制邮箱</button>
+        <button className="secondary-button" onClick={copyEmail}>{copied ? "已复制邮箱" : "复制邮箱"}</button>
         <button className="primary-button" onClick={draftFollowup} disabled={drafting}>{drafting ? "生成中..." : "AI跟进"}</button>
       </div>
     </div>
@@ -766,13 +1054,38 @@ function LeadDetail({ state, setState, go }) {
 }
 
 function AccountPermissions({ go }) {
+  const [showBenefits, setShowBenefits] = useState(false);
+  const [renewalMessage, setRenewalMessage] = useState("");
+  const [renewing, setRenewing] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  async function requestRenewal() {
+    if (renewing) return;
+    setRenewing(true);
+    setNotice("");
+    try {
+      const result = await api("/api/account/renewal", { method: "POST", body: "{}" });
+      setRenewalMessage(result.message);
+    } catch (error) {
+      setNotice(`提交失败：${error.message}`);
+    } finally {
+      setRenewing(false);
+    }
+  }
+
   return (
     <div className="screen">
       <Header title="账户权限" left={<BackButton go={go} />} right={<b className="vip-badge">VIP</b>} />
       <section className="vip-card">
         <div><Crown size={24} /><strong>VIP会员</strong><span>有效期至 2026-05-20</span></div>
-        <button>查看权益</button>
+        <button onClick={() => setShowBenefits((value) => !value)}>{showBenefits ? "收起权益" : "查看权益"}</button>
       </section>
+      {showBenefits ? (
+        <section className="notice-card">
+          <strong>VIP权益</strong>
+          <span>商品上架上限100件、完整邮箱查看、AI发布与AI跟进优先队列、优先展示权重。</span>
+        </section>
+      ) : null}
       <section className="permission-list">
         {[
           ["商品发布上限", "100 / 100件"],
@@ -788,12 +1101,41 @@ function AccountPermissions({ go }) {
         <div><span>VIP会员（12个月）</span><strong>￥2999</strong></div>
         <div><span>VIP会员（6个月）</span><strong>￥1688</strong></div>
       </section>
-      <button className="primary-button fixed-action">联系运营续费</button>
+      {renewalMessage ? <div className="notice-card">{renewalMessage}</div> : null}
+      {notice ? <div className="notice-card error">{notice}</div> : null}
+      <button className="primary-button fixed-action" onClick={requestRenewal} disabled={renewing}>{renewing ? "提交中..." : "联系运营续费"}</button>
     </div>
   );
 }
 
-function Profile({ state, go }) {
+function Profile({ state, setState, go }) {
+  const [notice, setNotice] = useState("");
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  async function logout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      window.localStorage.removeItem("sellerToken");
+      const appState = await api("/api/app-state");
+      setState((current) => ({ ...current, ...appState, leads: [], agentRuns: [], selectedLeadId: null }));
+      go("buyer");
+    } catch (error) {
+      setNotice(`退出失败：${error.message}`);
+    } finally {
+      setLoggingOut(false);
+    }
+  }
+
+  function handleMenu(label) {
+    if (label === "账户信息") go("account");
+    if (label === "绑定邮箱") setNotice(`当前绑定邮箱：${state.seller?.email ?? sellerEmail}`);
+    if (label === "商家店铺") go("products");
+    if (label === "帮助中心") setNotice("帮助中心已记录您的咨询入口，后续可接入在线客服。");
+    if (label === "关于我们") setNotice("AI翡翠匹配为买家找货和商家客资转化提供 Agent 工作流。");
+    if (label === "退出登录") logout();
+  }
+
   return (
     <div className="screen">
       <Header title="个人中心" left={<BackButton go={go} />} />
@@ -813,19 +1155,21 @@ function Profile({ state, go }) {
           [Inbox, "关于我们"],
           [LockKeyhole, "退出登录"]
         ].map(([Icon, label]) => (
-          <button key={label} onClick={() => (label === "账户信息" ? go("account") : null)}>
+          <button key={label} onClick={() => handleMenu(label)} disabled={label === "退出登录" && loggingOut}>
             <Icon size={18} />
-            <span>{label}</span>
+            <span>{label === "退出登录" && loggingOut ? "退出中" : label}</span>
             <ChevronRight size={16} />
           </button>
         ))}
       </section>
+      {notice ? <div className="notice-card">{notice}</div> : null}
     </div>
   );
 }
 
 export default function App() {
-  const [route, go] = useHashRoute();
+  const [routeInfo, go] = useHashRoute();
+  const route = routeInfo.route;
   const [ready, setReady] = useState(false);
   const [state, setState] = useState({
     seller: null,
@@ -840,7 +1184,11 @@ export default function App() {
     followupByLead: {},
     lastTrace: []
   });
-  const selectedProduct = useMemo(() => state.products[0], [state.products]);
+  const selectedProduct = useMemo(
+    () => state.products.find((product) => product.id === (routeInfo.selectedProductId ?? state.selectedProductId)) ?? state.products[0],
+    [state.products, state.selectedProductId, routeInfo.selectedProductId]
+  );
+  const selectedLeadId = routeInfo.selectedLeadId ?? state.selectedLeadId;
 
   useEffect(() => {
     api("/api/app-state")
@@ -851,24 +1199,40 @@ export default function App() {
       .finally(() => setReady(true));
   }, []);
 
-  if (!ready || !selectedProduct) {
+  useEffect(() => {
+    if (!routeInfo.selectedProductId && !routeInfo.selectedLeadId) return;
+    setState((current) => ({
+      ...current,
+      selectedProductId: routeInfo.selectedProductId ?? current.selectedProductId,
+      selectedLeadId: routeInfo.selectedLeadId ?? current.selectedLeadId
+    }));
+  }, [routeInfo.selectedProductId, routeInfo.selectedLeadId]);
+
+  if (!ready) {
     return <div className="loading">正在启动 AI 翡翠匹配...</div>;
   }
 
   const screens = {
     buyer: <BuyerHome state={state} setState={setState} go={go} />,
-    detail: <ProductDetail product={selectedProduct} go={go} setState={setState} />,
+    detail: selectedProduct ? (
+      <ProductDetail product={selectedProduct} go={go} setState={setState} />
+    ) : (
+      <div className="screen">
+        <Header title="商品详情" left={<BackButton go={go} to="buyer" />} />
+        <div className="empty-state">该商品暂不可查看</div>
+      </div>
+    ),
     login: <LoginPage go={go} setState={setState} />,
     dashboard: <Dashboard state={state} setState={setState} go={go} />,
     publish: <PublishGuide state={state} setState={setState} go={go} />,
     publishResult: <PublishResult state={state} go={go} />,
     editInfo: <EditInfo state={state} setState={setState} go={go} />,
-    products: <ProductManagement state={state} go={go} />,
+    products: <ProductManagement state={state} setState={setState} go={go} />,
     editProduct: <EditProduct state={state} setState={setState} go={go} />,
     leads: <LeadsList state={state} setState={setState} go={go} />,
-    leadDetail: <LeadDetail state={state} setState={setState} go={go} />,
+    leadDetail: <LeadDetail state={{ ...state, selectedLeadId }} setState={setState} go={go} />,
     account: <AccountPermissions go={go} />,
-    profile: <Profile state={state} go={go} />
+    profile: <Profile state={state} setState={setState} go={go} />
   };
 
   const activeScreen = merchantRoutes.has(route) && !state.seller

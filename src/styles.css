@@ -31,6 +31,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
 .app-shell {
   display: grid;
   min-height: 100vh;
@@ -103,6 +108,27 @@ button {
 }
 
 .screen::-webkit-scrollbar {
+  width: 0;
+}
+
+.buyer-screen {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  padding: 0;
+}
+
+.buyer-screen > .brandbar {
+  margin: 16px 16px 0;
+}
+
+.buyer-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+.buyer-scroll::-webkit-scrollbar {
   width: 0;
 }
 
@@ -323,6 +349,7 @@ button {
 .lead-detail-card,
 .followup-card,
 .agent-mini,
+.notice-card,
 .permission-list,
 .plan-card,
 .profile-card,
@@ -465,6 +492,10 @@ button {
   box-shadow: 0 12px 28px rgba(24, 67, 44, 0.1);
 }
 
+.buyer-screen .input-dock {
+  margin: 0 16px 16px;
+}
+
 .input-dock input,
 .lead-box input,
 .field input,
@@ -490,6 +521,11 @@ button {
   border-radius: 8px;
   font-size: 12px;
   font-weight: 800;
+}
+
+.input-dock button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
 .hero-image {
@@ -1107,6 +1143,64 @@ button {
   color: #cf3f30;
 }
 
+.row-actions button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.row-confirm {
+  grid-column: 1 / 4;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 8px;
+  background: #fff7f5;
+}
+
+.row-confirm span {
+  color: #8e4b3f;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.row-confirm button,
+.confirm-actions button {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid #e0ebe5;
+  border-radius: 8px;
+  color: #60766b;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.row-confirm button:last-child,
+.confirm-actions button:last-child {
+  color: #fff;
+  background: #cf3f30;
+  border-color: #cf3f30;
+}
+
+.row-confirm button:disabled,
+.confirm-actions button:disabled {
+  cursor: progress;
+  opacity: 0.64;
+}
+
+.empty-state {
+  padding: 22px 12px;
+  border: 1px dashed #d8e5df;
+  border-radius: 8px;
+  color: #71837a;
+  background: #fff;
+  font-size: 12px;
+  text-align: center;
+}
+
 .locked-tip {
   margin: 26px 0 6px;
   color: #819188;
@@ -1215,6 +1309,49 @@ button {
   background: rgba(255, 255, 255, 0.6);
   font-size: 12px;
   font-weight: 800;
+}
+
+.notice-card {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  color: #60766b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.notice-card strong {
+  color: #087243;
+  font-size: 13px;
+}
+
+.notice-card.error {
+  border-color: #f2c7bd;
+  color: #9e3b2f;
+  background: #fff7f5;
+}
+
+.notice-card.danger {
+  gap: 8px;
+  color: #8e4b3f;
+  background: #fff7f5;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.copy-link {
+  overflow-wrap: anywhere;
+  padding: 9px 10px;
+  border: 1px solid #dce8e1;
+  border-radius: 8px;
+  color: #087243;
+  background: #f7faf8;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .permission-list,

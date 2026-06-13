@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS seller_sessions (
 CREATE TABLE IF NOT EXISTS products (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   seller_id INTEGER NOT NULL,
+  sku TEXT UNIQUE,
   title TEXT NOT NULL,
   category TEXT NOT NULL,
   price INTEGER NOT NULL,
@@ -43,6 +44,27 @@ CREATE TABLE IF NOT EXISTS products (
   detail TEXT NOT NULL,
   diameter TEXT,
   quality TEXT,
+  material TEXT,
+  jadeite_type TEXT,
+  color TEXT,
+  water TEXT,
+  shape TEXT,
+  size TEXT,
+  weight TEXT,
+  certificate TEXT,
+  certificate_no TEXT,
+  flaws TEXT,
+  origin TEXT,
+  treatment TEXT,
+  inventory_count INTEGER DEFAULT 1,
+  negotiable INTEGER DEFAULT 1,
+  scene TEXT,
+  upload_source TEXT,
+  merchant_notes TEXT,
+  search_keywords_json TEXT,
+  specs_json TEXT,
+  rag_text TEXT,
+  deleted_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (seller_id) REFERENCES sellers(id)
@@ -103,7 +125,52 @@ CREATE TABLE IF NOT EXISTS image_jobs (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (seller_id) REFERENCES sellers(id)
 );
+
+CREATE TABLE IF NOT EXISTS product_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL,
+  chunk_type TEXT NOT NULL,
+  content TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  embedding_json TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(product_id, chunk_type),
+  FOREIGN KEY (product_id) REFERENCES products(id)
+);
 `);
+
+const productColumnDefs = {
+  sku: "TEXT",
+  material: "TEXT",
+  jadeite_type: "TEXT",
+  color: "TEXT",
+  water: "TEXT",
+  shape: "TEXT",
+  size: "TEXT",
+  weight: "TEXT",
+  certificate: "TEXT",
+  certificate_no: "TEXT",
+  flaws: "TEXT",
+  origin: "TEXT",
+  treatment: "TEXT",
+  inventory_count: "INTEGER DEFAULT 1",
+  negotiable: "INTEGER DEFAULT 1",
+  scene: "TEXT",
+  upload_source: "TEXT",
+  merchant_notes: "TEXT",
+  search_keywords_json: "TEXT",
+  specs_json: "TEXT",
+  rag_text: "TEXT",
+  deleted_at: "TEXT"
+};
+const productColumns = db.prepare("PRAGMA table_info(products)").all().map((column) => column.name);
+for (const [name, type] of Object.entries(productColumnDefs)) {
+  if (!productColumns.includes(name)) {
+    db.prepare(`ALTER TABLE products ADD COLUMN ${name} ${type}`).run();
+  }
+}
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS products_sku_idx ON products(sku) WHERE sku IS NOT NULL");
 
 const imageJobColumns = db.prepare("PRAGMA table_info(image_jobs)").all().map((column) => column.name);
 if (!imageJobColumns.includes("seller_id")) {
@@ -112,8 +179,9 @@ if (!imageJobColumns.includes("seller_id")) {
 
 const encode = (value) => JSON.stringify(value);
 const decode = (value, fallback) => {
+  if (value == null) return fallback;
   try {
-    return JSON.parse(value);
+    return JSON.parse(value) ?? fallback;
   } catch {
     return fallback;
   }
@@ -126,12 +194,13 @@ JOIN sellers s ON s.id = p.seller_id
 `;
 
 export function normalizeProduct(row) {
-  return {
+  const product = {
     id: row.id,
     sellerId: row.seller_id,
     sellerEmail: row.seller_email,
     sellerName: row.seller_name,
     vipUntil: row.vip_until,
+    sku: row.sku,
     title: row.title,
     category: row.category,
     price: row.price,
@@ -143,9 +212,277 @@ export function normalizeProduct(row) {
     detail: row.detail,
     diameter: row.diameter,
     quality: row.quality,
+    material: row.material,
+    jadeiteType: row.jadeite_type,
+    color: row.color,
+    water: row.water,
+    shape: row.shape,
+    size: row.size,
+    weight: row.weight,
+    certificate: row.certificate,
+    certificateNo: row.certificate_no,
+    flaws: row.flaws,
+    origin: row.origin,
+    treatment: row.treatment,
+    inventoryCount: row.inventory_count,
+    negotiable: Boolean(row.negotiable),
+    scene: row.scene,
+    uploadSource: row.upload_source,
+    merchantNotes: row.merchant_notes,
+    searchKeywords: decode(row.search_keywords_json, []),
+    specs: decode(row.specs_json, {}),
+    ragText: row.rag_text,
+    deletedAt: row.deleted_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+  if (!product.searchKeywords.length) product.searchKeywords = productKeywords(product);
+  if (!product.ragText) product.ragText = productRagText(product);
+  return product;
+}
+
+function compact(value) {
+  return Array.from(new Set(value.filter(Boolean).map((item) => String(item).trim()).filter(Boolean)));
+}
+
+function productKeywords(product) {
+  return compact([
+    product.title,
+    product.category,
+    product.quality,
+    product.water,
+    product.color,
+    product.shape,
+    product.size,
+    product.diameter,
+    product.material,
+    product.treatment,
+    product.scene,
+    product.certificate,
+    product.flaws,
+    ...(product.tags ?? [])
+  ]);
+}
+
+function productRagText(product) {
+  return [
+    `商品：${product.title}`,
+    `SKU：${product.sku ?? "未设置"}`,
+    `品类：${product.category}`,
+    `价格：${product.price}元，原价：${product.originPrice ?? product.price}元`,
+    `材质：${product.material ?? "翡翠"}，处理方式：${product.treatment ?? "天然A货"}`,
+    `种水：${product.water ?? product.quality ?? ""}，颜色：${product.color ?? ""}，器型：${product.shape ?? ""}`,
+    `尺寸：${product.size ?? product.diameter ?? ""}，重量：${product.weight ?? "未称重"}`,
+    `瑕疵：${product.flaws ?? "以实物复检为准"}，证书：${product.certificate ?? "可复检"}`,
+    `适用场景：${product.scene ?? "自用、送礼"}`,
+    `标签：${(product.tags ?? []).join("、")}`,
+    `简介：${product.intro}`,
+    `详情：${product.detail}`,
+    `商家备注：${product.merchantNotes ?? ""}`
+  ].filter((line) => !line.endsWith("：")).join("\n");
+}
+
+function enrichProduct(input) {
+  const tags = Array.isArray(input.tags) ? input.tags : [];
+  const product = {
+    sellerId: input.sellerId,
+    sku: input.sku ?? null,
+    title: input.title,
+    category: input.category,
+    price: input.price,
+    originPrice: input.originPrice ?? input.price,
+    status: input.status ?? "listed",
+    images: Array.isArray(input.images) ? input.images : [],
+    tags,
+    intro: input.intro,
+    detail: input.detail,
+    diameter: input.diameter ?? input.size ?? null,
+    quality: input.quality ?? input.water ?? null,
+    material: input.material ?? "翡翠",
+    jadeiteType: input.jadeiteType ?? "缅甸翡翠",
+    color: input.color ?? input.quality ?? null,
+    water: input.water ?? input.quality ?? null,
+    shape: input.shape ?? input.category,
+    size: input.size ?? input.diameter ?? null,
+    weight: input.weight ?? null,
+    certificate: input.certificate ?? "支持复检",
+    certificateNo: input.certificateNo ?? null,
+    flaws: input.flaws ?? (tags.includes("无纹裂") ? "无纹裂" : "以实物复检为准"),
+    origin: input.origin ?? "云南瑞丽",
+    treatment: input.treatment ?? "天然A货",
+    inventoryCount: input.inventoryCount ?? 1,
+    negotiable: input.negotiable ?? true,
+    scene: input.scene ?? (tags.includes("送礼佳品") ? "送礼" : "自用/送礼"),
+    uploadSource: input.uploadSource ?? "merchant_manual",
+    merchantNotes: input.merchantNotes ?? "",
+    specs: input.specs ?? {}
+  };
+  product.searchKeywords = input.searchKeywords ?? productKeywords(product);
+  product.ragText = input.ragText ?? productRagText(product);
+  return product;
+}
+
+function insertProduct(product) {
+  return db.prepare(`
+    INSERT INTO products (
+      seller_id, sku, title, category, price, origin_price, status, images_json,
+      tags_json, intro, detail, diameter, quality, material, jadeite_type, color,
+      water, shape, size, weight, certificate, certificate_no, flaws, origin,
+      treatment, inventory_count, negotiable, scene, upload_source, merchant_notes,
+      search_keywords_json, specs_json, rag_text
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    product.sellerId,
+    product.sku,
+    product.title,
+    product.category,
+    product.price,
+    product.originPrice,
+    product.status,
+    encode(product.images),
+    encode(product.tags),
+    product.intro,
+    product.detail,
+    product.diameter,
+    product.quality,
+    product.material,
+    product.jadeiteType,
+    product.color,
+    product.water,
+    product.shape,
+    product.size,
+    product.weight,
+    product.certificate,
+    product.certificateNo,
+    product.flaws,
+    product.origin,
+    product.treatment,
+    product.inventoryCount,
+    product.negotiable ? 1 : 0,
+    product.scene,
+    product.uploadSource,
+    product.merchantNotes,
+    encode(product.searchKeywords),
+    encode(product.specs),
+    product.ragText
+  );
+}
+
+function upsertProductDocument(product) {
+  db.prepare(`
+    INSERT INTO product_documents (product_id, chunk_type, content, metadata_json)
+    VALUES (?, 'catalog_card', ?, ?)
+    ON CONFLICT(product_id, chunk_type) DO UPDATE SET
+      content = excluded.content,
+      metadata_json = excluded.metadata_json,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(product.id, product.ragText, encode({
+    sku: product.sku,
+    title: product.title,
+    category: product.category,
+    price: product.price,
+    tags: product.tags,
+    keywords: product.searchKeywords,
+    status: product.status
+  }));
+}
+
+function syncProductDocuments() {
+  for (const product of listProducts()) {
+    upsertProductDocument(product);
+  }
+}
+
+function seedCatalogProducts(sellerId) {
+  const imageSets = [
+    ["/assets/jade-bangle-main.jpg", "/assets/jade-upload-bangle.jpg", "/assets/jade-bangle-1.jpg"],
+    ["/assets/jade-bangle-2.jpg", "/assets/jade-bangle-3.jpg", "/assets/jade-list-bangle.jpg"],
+    ["/assets/jade-dark-bangle.jpg", "/assets/jade-bangle-1.jpg"],
+    ["/assets/jade-pendant.jpg", "/assets/jade-pendant-small.jpg", "/assets/jade-list-pendant.jpg"],
+    ["/assets/jade-list-pendant.jpg", "/assets/jade-pendant.jpg"],
+    ["/assets/jade-ring.jpg", "/assets/jade-bangle-3.jpg"],
+    ["/assets/jade-pendant-small.jpg", "/assets/jade-list-pendant.jpg"],
+    ["/assets/jade-upload-bangle.jpg", "/assets/jade-bangle-main.jpg"]
+  ];
+  const categories = [
+    { category: "手镯", shapes: ["正圈", "圆条", "贵妃"], sizes: ["53mm", "54mm", "55mm", "56mm", "57mm", "58mm"], base: 28000, images: [0, 1, 2, 7] },
+    { category: "吊坠", shapes: ["水滴", "如意", "佛公", "叶子"], sizes: ["28x16mm", "32x18mm", "36x21mm", "42x24mm"], base: 12000, images: [3, 4, 6] },
+    { category: "戒面", shapes: ["蛋面", "马鞍", "随形"], sizes: ["10x8mm", "12x10mm", "14x11mm"], base: 18000, images: [5] },
+    { category: "平安扣", shapes: ["圆扣", "怀古扣"], sizes: ["22mm", "26mm", "30mm"], base: 9000, images: [3, 4] },
+    { category: "珠链", shapes: ["圆珠", "算盘珠"], sizes: ["7mm珠", "8mm珠", "9mm珠"], base: 22000, images: [6, 4] }
+  ];
+  const waters = ["糯种", "糯冰", "冰种", "高冰", "玻璃种"];
+  const colors = ["晴底", "白冰", "飘绿", "阳绿", "蓝水", "紫罗兰", "黄翡", "油青"];
+  const certificates = ["NGTC国检证书", "GIC证书", "省检证书", "商家复检报告"];
+  const flaws = ["无纹裂", "轻微棉絮", "少量石纹", "边缘细小矿点", "肉眼干净"];
+  const scenes = ["送礼", "日常佩戴", "收藏", "通勤佩戴", "节日礼赠"];
+  const waterPrice = { 糯种: 0.7, 糯冰: 0.9, 冰种: 1.25, 高冰: 1.75, 玻璃种: 2.4 };
+  const colorPrice = { 晴底: 1.1, 白冰: 1.05, 飘绿: 1.3, 阳绿: 1.9, 蓝水: 1.25, 紫罗兰: 1.35, 黄翡: 1.15, 油青: 0.8 };
+
+  return Array.from({ length: 50 }, (_, index) => {
+    const category = categories[index % categories.length];
+    const water = waters[(index + Math.floor(index / 5)) % waters.length];
+    const color = colors[(index * 3 + 1) % colors.length];
+    const shape = category.shapes[index % category.shapes.length];
+    const size = category.sizes[(index + 2) % category.sizes.length];
+    const flaw = flaws[(index + 3) % flaws.length];
+    const scene = scenes[(index + 1) % scenes.length];
+    const price = Math.round(category.base * waterPrice[water] * colorPrice[color] / 100) * 100 + (index % 4) * 800;
+    const sku = `JDAI-${String(index + 1).padStart(4, "0")}`;
+    const title = `${water}${color}翡翠${shape}${category.category}`;
+    const tags = compact([
+      water,
+      color,
+      `翡翠${category.category}`,
+      shape,
+      size,
+      flaw,
+      "天然A货",
+      scene === "送礼" || scene === "节日礼赠" ? "送礼佳品" : "自用",
+      price <= 30000 ? "高性价比" : "精品货源"
+    ]);
+    const images = imageSets[category.images[index % category.images.length]];
+    const intro = `${water}${color}，${shape}${category.category}，${flaw}，适合${scene}。`;
+    const detail = `${title}由商家手动上传，实物主图和细节图已入库。整体为${water}质地，${color}色调，${shape}器型，尺寸${size}。瑕疵说明：${flaw}；处理方式为天然A货，支持复检。适合${scene}，可用于后续 RAG 检索、预算匹配、标签召回和 Agent 推荐解释。`;
+    return enrichProduct({
+      sellerId,
+      sku,
+      title,
+      category: category.category,
+      price,
+      originPrice: Math.round(price * 1.08 / 100) * 100,
+      status: "listed",
+      images,
+      tags,
+      intro,
+      detail,
+      diameter: category.category === "手镯" ? size : null,
+      quality: `${water}${color}`,
+      material: "翡翠",
+      jadeiteType: "缅甸翡翠",
+      color,
+      water,
+      shape,
+      size,
+      weight: category.category === "手镯" ? `${48 + (index % 9)}g` : `${3 + (index % 8)}g`,
+      certificate: certificates[index % certificates.length],
+      certificateNo: `CERT-${String(202606000 + index + 1)}`,
+      flaws: flaw,
+      origin: ["云南瑞丽", "广东四会", "平洲玉器街", "揭阳工坊"][index % 4],
+      treatment: "天然A货",
+      inventoryCount: 1 + (index % 3),
+      negotiable: index % 5 !== 0,
+      scene,
+      uploadSource: "merchant_manual_simulated",
+      merchantNotes: `模拟商家手动上传货源 ${sku}，已补充种水、颜色、尺寸、证书、瑕疵和推荐场景。`,
+      specs: {
+        light: index % 2 === 0 ? "自然光" : "室内柔光",
+        videoAvailable: index % 3 !== 0,
+        certificateChecked: true,
+        source: "seeded_merchant_inventory"
+      }
+    });
+  });
 }
 
 export function seedDatabase() {
@@ -237,6 +574,13 @@ export function seedDatabase() {
     );
   }
 
+  for (const product of seedCatalogProducts(sellerId)) {
+    const existing = db.prepare("SELECT id FROM products WHERE sku = ?").get(product.sku);
+    if (!existing) insertProduct(product);
+  }
+
+  syncProductDocuments();
+
   const leadCount = db.prepare("SELECT COUNT(*) AS count FROM leads").get()
     .count;
   if (leadCount === 0) {
@@ -283,6 +627,9 @@ export function listProducts(filter = {}) {
   if (filter.sellerId) {
     products = products.filter((product) => product.sellerId === Number(filter.sellerId));
   }
+  if (!filter.includeDeleted && filter.status !== "deleted") {
+    products = products.filter((product) => product.status !== "deleted");
+  }
   if (filter.publicOnly) {
     products = products.filter((product) => product.status === "listed");
   }
@@ -298,57 +645,77 @@ export function getProduct(id) {
 }
 
 export function createProduct(input) {
-  const result = db
-    .prepare(
-      `INSERT INTO products (
-        seller_id, title, category, price, origin_price, status, images_json,
-        tags_json, intro, detail, diameter, quality
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      input.sellerId,
-      input.title,
-      input.category,
-      input.price,
-      input.originPrice ?? input.price,
-      input.status ?? "listed",
-      encode(input.images),
-      encode(input.tags),
-      input.intro,
-      input.detail,
-      input.diameter,
-      input.quality
-    );
-  return getProduct(result.lastInsertRowid);
+  const product = enrichProduct(input);
+  const result = insertProduct(product);
+  const created = getProduct(result.lastInsertRowid);
+  upsertProductDocument(created);
+  return created;
 }
 
 export function updateProduct(id, input, sellerId) {
+  const product = enrichProduct({ ...input, sellerId });
   const result = db.prepare(
     `UPDATE products
      SET title = ?, category = ?, price = ?, origin_price = ?, status = ?,
          images_json = ?, tags_json = ?, intro = ?, detail = ?, diameter = ?,
-         quality = ?, updated_at = CURRENT_TIMESTAMP
+         quality = ?, material = ?, jadeite_type = ?, color = ?, water = ?,
+         shape = ?, size = ?, weight = ?, certificate = ?, certificate_no = ?,
+         flaws = ?, origin = ?, treatment = ?, inventory_count = ?, negotiable = ?,
+         scene = ?, upload_source = ?, merchant_notes = ?, search_keywords_json = ?,
+         specs_json = ?, rag_text = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND seller_id = ?`
   ).run(
-    input.title,
-    input.category,
-    input.price,
-    input.originPrice ?? input.price,
-    input.status,
-    encode(input.images),
-    encode(input.tags),
-    input.intro,
-    input.detail,
-    input.diameter,
-    input.quality,
+    product.title,
+    product.category,
+    product.price,
+    product.originPrice,
+    product.status,
+    encode(product.images),
+    encode(product.tags),
+    product.intro,
+    product.detail,
+    product.diameter,
+    product.quality,
+    product.material,
+    product.jadeiteType,
+    product.color,
+    product.water,
+    product.shape,
+    product.size,
+    product.weight,
+    product.certificate,
+    product.certificateNo,
+    product.flaws,
+    product.origin,
+    product.treatment,
+    product.inventoryCount,
+    product.negotiable ? 1 : 0,
+    product.scene,
+    product.uploadSource,
+    product.merchantNotes,
+    encode(product.searchKeywords),
+    encode(product.specs),
+    product.ragText,
     id,
     sellerId
   );
   if (result.changes === 0) return null;
-  return getProduct(id);
+  const updated = getProduct(id);
+  upsertProductDocument(updated);
+  return updated;
 }
 
-export function listLeads(sellerId) {
+export function deleteProduct(id, sellerId) {
+  const result = db.prepare(
+    "UPDATE products SET status = 'deleted', deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND seller_id = ?"
+  ).run(id, sellerId);
+  if (result.changes === 0) return null;
+  const deleted = getProduct(id);
+  if (deleted) upsertProductDocument(deleted);
+  return deleted;
+}
+
+export function listLeads(sellerId, filter = {}) {
   const rows = db
     .prepare(
       `SELECT l.*, p.title AS product_title, p.price AS product_price, p.images_json,
@@ -360,7 +727,7 @@ export function listLeads(sellerId) {
        ORDER BY l.created_at DESC, l.id DESC`
     )
     .all(sellerId ?? null, sellerId ?? null);
-  return rows.map((row) => ({
+  let leads = rows.map((row) => ({
     id: row.id,
     productId: row.product_id,
     sellerId: row.seller_id,
@@ -376,6 +743,10 @@ export function listLeads(sellerId) {
     sellerEmail: row.seller_email,
     sellerName: row.seller_name
   }));
+  if (filter.status) {
+    leads = leads.filter((lead) => lead.status === filter.status);
+  }
+  return leads;
 }
 
 export function createLead(input) {

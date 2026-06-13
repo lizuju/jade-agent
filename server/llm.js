@@ -18,6 +18,15 @@ const compatibleClient =
       })
     : null;
 
+function publicProviderError(error) {
+  const message = String(error.message ?? error);
+  if (/api key|unauthorized|authentication|401/i.test(message)) return "model_auth_failed";
+  return message
+    .replace(/sk-[A-Za-z0-9_*.-]+/g, "[REDACTED_SECRET]")
+    .replace(/[A-Za-z0-9_-]{4}\*{4,}[A-Za-z0-9_-]{3,}/g, "[REDACTED_SECRET]")
+    .slice(0, 180);
+}
+
 async function completeWithOllama(prompt, json) {
   const response = await fetch(`${ollamaBaseUrl}/api/chat`, {
     method: "POST",
@@ -61,7 +70,7 @@ export async function completeTextResult(prompt, options = {}) {
       ok: false,
       text: null,
       provider,
-      error: String(error.message ?? error),
+      error: publicProviderError(error),
       durationMs: Date.now() - startedAt
     };
   }
