@@ -128,8 +128,8 @@ function BottomNav({ active, go }) {
 }
 
 function agentLabel(type) {
+  if (type === "buyer_match") return "买家匹配 Agent";
   if (type === "lead_followup") return "客资跟进 Agent";
-  if (type === "image_generate") return "图片生成 Agent";
   return "商品发布 Agent";
 }
 
@@ -144,6 +144,7 @@ function ProductCard({ product, onOpen }) {
           {money(product.price)}
           {product.vipUntil ? <small>VIP</small> : null}
         </div>
+        {product.agentScore ? <em>匹配分 {product.agentScore.total} · {product.matchReasons?.[0]}</em> : null}
       </div>
     </button>
   );
@@ -162,10 +163,47 @@ function Field({ label, value, onChange, multiline }) {
   );
 }
 
+function validateBuyerNeedText(text) {
+  const value = text.trim();
+  if (value.length > 240) return "请把消息控制在 240 字以内。";
+  return "";
+}
+
+function validateProductDraft(draft) {
+  if (!draft?.title || draft.title.trim().length < 4) return "商品标题至少需要 4 个字。";
+  if (!draft.category) return "请选择或生成商品品类。";
+  if (!Number.isFinite(Number(draft.price)) || Number(draft.price) < 100) return "商品价格需要大于 100 元。";
+  if (!draft.images?.length) return "至少需要 1 张商品图片。";
+  if (!draft.tags?.length) return "至少需要 1 个商品标签。";
+  if (!draft.intro || draft.intro.trim().length < 8) return "商品简介至少需要 8 个字。";
+  if (!draft.detail || draft.detail.trim().length < 20) return "商品详情至少需要 20 个字。";
+  return "";
+}
+
+function AgentEvidence({ match }) {
+  if (!match?.validation && !match?.retrieval) return null;
+  return (
+    <section className="agent-proof">
+      <div>
+        <strong>规则校验</strong>
+        <span>{match.validation?.passed?.join("；") || "基础需求已通过"}</span>
+        {match.validation?.warnings?.length ? <small>{match.validation.warnings.join("；")}</small> : null}
+      </div>
+      <div>
+        <strong>RAG来源</strong>
+        {(match.retrieval?.documents ?? []).slice(0, 3).map((doc) => (
+          <span key={`${doc.productId}-${doc.score}`}>#{doc.productId} {doc.productTitle} · 命中 {doc.matchedTerms.slice(0, 4).join("、") || "商品文档"}</span>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function BuyerHome({ state, setState, go }) {
   const [need, setNeed] = useState("预算5万左右，冰种晴底翡翠手镯，55圈口，正圈，无纹裂，送礼");
   const [loading, setLoading] = useState(false);
   const [thinkingDotCount, setThinkingDotCount] = useState(1);
+  const [clientNotice, setClientNotice] = useState("");
   const [messages, setMessages] = useState([
     {
       id: "welcome",
@@ -208,21 +246,33 @@ function BuyerHome({ state, setState, go }) {
   async function match() {
     const text = need.trim();
     if (!text || isThinking) return;
+    const validationMessage = validateBuyerNeedText(text);
+    if (validationMessage) {
+      setClientNotice(validationMessage);
+      return;
+    }
 
     setLoading(true);
+    setClientNotice("");
     const pendingId = `assistant-${Date.now()}`;
     setMessages((current) => [
       ...current,
       { id: `user-${Date.now()}`, role: "user", text, time: "现在" },
       { id: pendingId, role: "assistant", text: "已为您解析需求，正在匹配优质翡翠货源.", time: "进行中", thinking: true }
     ]);
+    setNeed("");
 
     try {
       const result = await api("/api/agent/buyer-match", {
         method: "POST",
         body: JSON.stringify({ sessionId: state.sessionId, need: text, buyerEmail })
       });
-      setState((current) => ({ ...current, sessionId: result.sessionId, match: result, lastTrace: result.trace }));
+      setState((current) => ({
+        ...current,
+        sessionId: result.sessionId,
+        match: result.mode === "customer_service" ? current.match : result,
+        lastTrace: result.trace
+      }));
       setMessages((current) => current.map((message) => (
         message.id === pendingId
           ? { ...message, text: result.reply ?? "已完成匹配，您可以继续补充预算、圈口或瑕疵要求。", time: "刚刚", thinking: false }
@@ -311,6 +361,7 @@ function BuyerHome({ state, setState, go }) {
             ))}
           </section>
         ) : null}
+        <AgentEvidence match={state.match} />
       </div>
 
       <div className="input-dock">
@@ -319,6 +370,7 @@ function BuyerHome({ state, setState, go }) {
           <Send size={16} />
           {isThinking ? "思考中" : "AI匹配"}
         </button>
+        {clientNotice ? <div className="input-notice">{clientNotice}</div> : null}
       </div>
     </div>
   );
@@ -528,43 +580,21 @@ function Dashboard({ state, setState, go }) {
 
 function PublishGuide({ state, setState, go }) {
   const [loading, setLoading] = useState(false);
-  const [imageLoading, setImageLoading] = useState(false);
   const [notice, setNotice] = useState("");
   const [images, setImages] = useState(state.publishImages?.length ? state.publishImages : ["/assets/jade-upload-bangle.jpg", "/assets/jade-pendant.jpg"]);
-  const imagePrompt = "冰种晴底翡翠手镯，55圈口，黑色岩石背景，商业珠宝摄影，真实自然光，高端电商主图";
 
-  async function generateImage() {
-    if (imageLoading) return;
-    setImageLoading(true);
+  function uploadImages(event) {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) return;
+    const nextImages = [...images, ...files.map((file) => URL.createObjectURL(file))].slice(0, 6);
+    setImages(nextImages);
+    setState((current) => ({ ...current, publishImages: nextImages }));
     setNotice("");
-    try {
-      const image = await api("/api/images/generate", {
-        method: "POST",
-        body: JSON.stringify({ prompt: imagePrompt })
-      });
-      const jobs = await api("/api/images/jobs?limit=6");
-      const runs = await api("/api/agent/runs");
-      const nextImages = [image.imageUrl, ...images.filter((item) => item !== image.imageUrl)].slice(0, 3);
-      setImages(nextImages);
-      setState((current) => ({
-        ...current,
-        publishImages: nextImages,
-        imageJobs: jobs.jobs,
-        agentRuns: runs.runs,
-        lastTrace: [
-          { label: "图片生成 Agent", detail: image.provider === "local-asset" ? "已使用本地素材生成发布图" : "已生成 OpenAI 商品图" },
-          { label: "素材入库", detail: `image_jobs：${image.status}` }
-        ]
-      }));
-    } catch (error) {
-      setNotice(`图片生成失败：${error.message}`);
-    } finally {
-      setImageLoading(false);
-    }
+    event.target.value = "";
   }
 
   async function generateDraft() {
-    if (loading || imageLoading) return;
+    if (loading) return;
     setLoading(true);
     setNotice("");
     try {
@@ -587,19 +617,17 @@ function PublishGuide({ state, setState, go }) {
 
   return (
     <div className="screen">
-      <Header title="发布商品" left={<BackButton go={go} />} right={<span className="saving">{loading || imageLoading ? "AI生成中" : "AI辅助"}</span>} />
+      <Header title="发布商品" left={<BackButton go={go} />} right={<span className="saving">{loading ? "AI生成中" : "AI辅助"}</span>} />
       <section className="upload-card">
-        <div className="step-title"><span>1.</span><strong>上传商品图片</strong><small>上传清晰的翡翠图片，AI将为您自动生成商品文案</small></div>
+        <div className="step-title"><span>1.</span><strong>上传商品图片</strong><small>上传清晰的翡翠图片，AI将根据图片和描述生成商品文案</small></div>
         <div className="upload-grid">
           {images.map((image) => <img key={image} src={image} alt="上传商品" />)}
-          <button onClick={generateImage} disabled={imageLoading}><ImagePlus size={28} /><span>{imageLoading ? "生成中" : "AI生成图片"}</span></button>
+          <label className="upload-add">
+            <ImagePlus size={28} />
+            <span>上传图片</span>
+            <input type="file" accept="image/*" multiple onChange={uploadImages} />
+          </label>
         </div>
-        {state.imageJobs?.[0] ? (
-          <div className="image-job">
-            <strong>{state.imageJobs[0].provider === "openai" ? "OpenAI图片任务" : "本地素材任务"}</strong>
-            <span>{state.imageJobs[0].status} · {state.imageJobs[0].prompt}</span>
-          </div>
-        ) : null}
         {notice ? <div className="notice-card error">{notice}</div> : null}
       </section>
       <section className="steps-card">
@@ -614,7 +642,7 @@ function PublishGuide({ state, setState, go }) {
           </div>
         ))}
       </section>
-      <button className="primary-button publish-action" onClick={generateDraft} disabled={loading || imageLoading}>
+      <button className="primary-button publish-action" onClick={generateDraft} disabled={loading}>
         <Wand2 size={18} />
         {loading ? "AI正在生成..." : "AI生成商品信息"}
       </button>
@@ -679,6 +707,11 @@ function EditInfo({ state, setState, go }) {
 
   async function publish() {
     if (saving) return;
+    const validationMessage = validateProductDraft(draft);
+    if (validationMessage) {
+      setNotice(validationMessage);
+      return;
+    }
     setSaving(true);
     setNotice("");
     try {
@@ -808,6 +841,11 @@ function EditProduct({ state, setState, go }) {
 
   async function save() {
     if (saving) return;
+    const validationMessage = validateProductDraft(draft);
+    if (validationMessage) {
+      setNotice(validationMessage);
+      return;
+    }
     setSaving(true);
     setNotice("");
     try {
@@ -1179,7 +1217,6 @@ export default function App() {
     match: null,
     draft: null,
     agentRuns: [],
-    imageJobs: [],
     publishImages: null,
     followupByLead: {},
     lastTrace: []

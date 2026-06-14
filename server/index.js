@@ -9,7 +9,6 @@ import {
   getSellerByToken,
   getSellerLead,
   listAgentRuns,
-  listImageJobs,
   listLeads,
   listProducts,
   markLeadContacted,
@@ -18,11 +17,20 @@ import {
   upsertSeller
 } from "./db.js";
 import {
-  generateProductImage,
   runBuyerMatchAgent,
   runLeadFollowupAgent,
   runPublishAgent
 } from "./agent.js";
+import {
+  ValidationError,
+  normalizeEmail,
+  validateBuyerMatchPayload,
+  validateLeadPayload,
+  validateLeadStatus,
+  validateLimit,
+  validateProductPayload,
+  validatePublishPayload
+} from "./validation.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
@@ -85,12 +93,10 @@ app.get("/api/app-state", (req, res) => {
   const seller = optionalSeller(req);
   const products = listProducts(seller ? { sellerId: seller.id } : { publicOnly: true });
   const leads = seller ? listLeads(seller.id) : [];
-  const imageJobs = seller ? listImageJobs({ sellerId: seller.id, limit: 6 }) : [];
   res.json({
     seller,
     products,
     leads,
-    imageJobs,
     metrics: {
       listedProducts: products.filter((product) => product.status === "listed").length,
       productQuota: 100,
@@ -116,14 +122,13 @@ app.get("/api/products/:id", (req, res) => {
 });
 
 app.post("/api/products", requireSeller, (req, res) => {
-  if (!req.body.title || !req.body.category || !req.body.price || !req.body.intro || !req.body.detail) {
-    return res.status(400).json({ error: "Missing required product fields" });
-  }
-  res.status(201).json({ product: createProduct({ ...req.body, sellerId: req.seller.id }) });
+  const product = validateProductPayload(req.body);
+  res.status(201).json({ product: createProduct({ ...product, sellerId: req.seller.id }) });
 });
 
 app.put("/api/products/:id", requireSeller, (req, res) => {
-  const product = updateProduct(req.params.id, req.body, req.seller.id);
+  const payload = validateProductPayload(req.body);
+  const product = updateProduct(req.params.id, payload, req.seller.id);
   if (!product) return res.status(404).json({ error: "Product not found" });
   res.json({ product });
 });
@@ -135,7 +140,7 @@ app.delete("/api/products/:id", requireSeller, (req, res) => {
 });
 
 app.get("/api/leads", requireSeller, (req, res) => {
-  res.json({ leads: listLeads(req.seller.id, { status: req.query.status }) });
+  res.json({ leads: listLeads(req.seller.id, { status: validateLeadStatus(req.query.status) }) });
 });
 
 app.get("/api/leads/:id", requireSeller, (req, res) => {
@@ -145,10 +150,8 @@ app.get("/api/leads/:id", requireSeller, (req, res) => {
 });
 
 app.post("/api/leads", (req, res) => {
-  if (!req.body.productId || !req.body.buyerEmail || !req.body.buyerNeed) {
-    return res.status(400).json({ error: "Missing required lead fields" });
-  }
-  const lead = createLead(req.body);
+  const payload = validateLeadPayload(req.body);
+  const lead = createLead(payload);
   if (!lead) return res.status(404).json({ error: "Product not found" });
   res.status(201).json({ lead });
 });
@@ -160,26 +163,51 @@ app.post("/api/leads/:id/contacted", requireSeller, (req, res) => {
 });
 
 app.post("/api/auth/otp", (req, res) => {
-  if (!String(req.body.email ?? "").includes("@")) {
-    return res.status(400).json({ error: "Invalid email" });
-  }
-  const seller = upsertSeller(req.body.email);
+  const email = normalizeEmail(req.body.email);
+  const seller = upsertSeller(email);
   res.json({ ok: true, seller, code: process.env.NODE_ENV === "production" ? undefined : devOtpCode });
 });
 
 app.post("/api/auth/login", (req, res) => {
-  if (!String(req.body.email ?? "").includes("@")) {
-    return res.status(400).json({ error: "Invalid email" });
-  }
+  const email = normalizeEmail(req.body.email);
   if (String(req.body.code ?? "") !== devOtpCode) {
     return res.status(401).json({ error: "Invalid code" });
   }
-  const seller = upsertSeller(req.body.email);
+  const seller = upsertSeller(email);
   res.json({ seller, token: createSellerSession(seller.id) });
 });
 
 app.get("/api/auth/me", requireSeller, (req, res) => {
   res.json({ seller: req.seller });
+});
+
+app.get("/api/agent/capabilities", (_req, res) => {
+  res.json({
+    buyerMatch: [
+      "frontend_need_validation",
+      "backend_payload_validation",
+      "langgraph_state_graph_orchestration",
+      "semantic_need_recognition",
+      "rule_validation",
+      "product_documents_rag_retrieval",
+      "semantic_rule_rag_ranking",
+      "traceable_agent_runs"
+    ],
+    merchantPublish: [
+      "frontend_product_validation",
+      "backend_product_validation",
+      "llm_or_local_draft_generation",
+      "merchant_uploaded_images",
+      "product_document_indexing"
+    ],
+    leadFollowup: [
+      "lead_authorization_check",
+      "buyer_need_summary",
+      "followup_copy_generation",
+      "next_action_generation",
+      "traceable_agent_runs"
+    ]
+  });
 });
 
 app.post("/api/account/renewal", requireSeller, (req, res) => {
@@ -192,7 +220,7 @@ app.post("/api/account/renewal", requireSeller, (req, res) => {
 
 app.post("/api/agent/buyer-match", async (req, res, next) => {
   try {
-    res.json(await runBuyerMatchAgent(req.body));
+    res.json(await runBuyerMatchAgent(validateBuyerMatchPayload(req.body)));
   } catch (error) {
     next(error);
   }
@@ -200,14 +228,14 @@ app.post("/api/agent/buyer-match", async (req, res, next) => {
 
 app.post("/api/agent/publish", requireSeller, async (req, res, next) => {
   try {
-    res.json(await runPublishAgent({ ...req.body, sellerId: req.seller.id }));
+    res.json(await runPublishAgent({ ...validatePublishPayload(req.body), sellerId: req.seller.id }));
   } catch (error) {
     next(error);
   }
 });
 
 app.get("/api/agent/runs", requireSeller, (req, res) => {
-  const limit = Number(req.query.limit) || 20;
+  const limit = validateLimit(req.query.limit, 20);
   res.json({ runs: listAgentRuns({ sellerId: req.seller.id, limit }) });
 });
 
@@ -223,20 +251,11 @@ app.post("/api/agent/leads/:id/followup", requireSeller, async (req, res, next) 
   }
 });
 
-app.get("/api/images/jobs", requireSeller, (req, res) => {
-  const limit = Number(req.query.limit) || 20;
-  res.json({ jobs: listImageJobs({ sellerId: req.seller.id, limit }) });
-});
-
-app.post("/api/images/generate", requireSeller, async (req, res, next) => {
-  try {
-    res.json(await generateProductImage({ ...req.body, sellerId: req.seller.id }));
-  } catch (error) {
-    next(error);
-  }
-});
-
 app.use((error, _req, res, _next) => {
+  if (error instanceof ValidationError) {
+    res.status(error.status).json({ error: error.message, details: error.details });
+    return;
+  }
   const requestId = Math.random().toString(36).slice(2, 10);
   const message = String(error.message ?? error).replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_SECRET]");
   console.error(`${requestId} ${error.name ?? "Error"}: ${message}`);
