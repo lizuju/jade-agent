@@ -546,41 +546,43 @@ function LoginPage({ go, setState }) {
 function Dashboard({ state, setState, go }) {
   return (
     <div className="screen with-nav">
-      <Header title={<span>商家后台 <b className="vip-badge">VIP</b></span>} left={<button className="icon-btn" onClick={() => go("profile")} aria-label="个人中心"><Menu size={21} /></button>} right={<button className="icon-btn" onClick={() => go("leads")} aria-label="客资通知"><Bell size={20} /></button>} />
-      <section className="metrics-card">
-        <div><span>商品数量</span><strong>{state.metrics.listedProducts} / {state.metrics.productQuota}</strong><small>已上架 / 上限</small></div>
-        <div><span>今日客资</span><strong>{state.metrics.todayLeads}</strong><small>条</small></div>
-        <div><span>累计客资</span><strong>{state.metrics.totalLeads}</strong><small>条</small></div>
-      </section>
-      <section className="quick-actions">
-        <button onClick={() => go("publish")}><PackagePlus size={22} /><span>发布商品</span></button>
-        <button onClick={() => go("products")}><Box size={22} /><span>商品管理</span></button>
-        <button onClick={() => go("leads")}><Inbox size={22} /><span>客资列表</span></button>
-        <button onClick={() => go("account")}><Crown size={22} /><span>账户权限</span></button>
-      </section>
-      <section className="list-section">
-        <div className="section-head"><h3>最近客资</h3><button onClick={() => go("leads")}>全部 <ChevronRight size={14} /></button></div>
-        {state.leads.slice(0, 3).map((lead) => (
-          <button className="lead-row" key={lead.id} onClick={() => {
-            setState((current) => ({ ...current, selectedLeadId: lead.id }));
-            go(`lead/${lead.id}`);
-          }}>
-            <span>{lead.createdAt.slice(5, 16)}</span>
-            <div>
-              <strong>{lead.buyerNeed}</strong>
-              <small>{lead.productTitle}</small>
-            </div>
-            <em>{maskEmail(lead.buyerEmail)}</em>
-          </button>
-        ))}
-      </section>
-      {state.agentRuns?.length ? (
-        <section className="agent-mini">
-          <div className="section-head"><h3>Agent运行</h3><small>{state.agentRuns[0].createdAt}</small></div>
-          <strong>{agentLabel(state.agentRuns[0].agentType)}</strong>
-          <span>{state.agentRuns[0].trace?.[0]?.detail ?? "暂无运行详情"}</span>
+      <div className="nav-scroll">
+        <Header title={<span>商家后台 <b className="vip-badge">VIP</b></span>} left={<button className="icon-btn" onClick={() => go("profile")} aria-label="个人中心"><Menu size={21} /></button>} right={<button className="icon-btn" onClick={() => go("leads")} aria-label="客资通知"><Bell size={20} /></button>} />
+        <section className="metrics-card">
+          <div><span>商品数量</span><strong>{state.metrics.listedProducts} / {state.metrics.productQuota}</strong><small>已上架 / 上限</small></div>
+          <div><span>今日客资</span><strong>{state.metrics.todayLeads}</strong><small>条</small></div>
+          <div><span>累计客资</span><strong>{state.metrics.totalLeads}</strong><small>条</small></div>
         </section>
-      ) : null}
+        <section className="quick-actions">
+          <button onClick={() => go("publish")}><PackagePlus size={22} /><span>发布商品</span></button>
+          <button onClick={() => go("products")}><Box size={22} /><span>商品管理</span></button>
+          <button onClick={() => go("leads")}><Inbox size={22} /><span>客资列表</span></button>
+          <button onClick={() => go("account")}><Crown size={22} /><span>账户权限</span></button>
+        </section>
+        <section className="list-section">
+          <div className="section-head"><h3>最近客资</h3><button onClick={() => go("leads")}>全部 <ChevronRight size={14} /></button></div>
+          {state.leads.slice(0, 3).map((lead) => (
+            <button className="lead-row" key={lead.id} onClick={() => {
+              setState((current) => ({ ...current, selectedLeadId: lead.id }));
+              go(`lead/${lead.id}`);
+            }}>
+              <span>{lead.createdAt.slice(5, 16)}</span>
+              <div>
+                <strong>{lead.buyerNeed}</strong>
+                <small>{lead.productTitle}</small>
+              </div>
+              <em>{maskEmail(lead.buyerEmail)}</em>
+            </button>
+          ))}
+        </section>
+        {state.agentRuns?.length ? (
+          <section className="agent-mini">
+            <div className="section-head"><h3>Agent运行</h3><small>{state.agentRuns[0].createdAt}</small></div>
+            <strong>{agentLabel(state.agentRuns[0].agentType)}</strong>
+            <span>{state.agentRuns[0].trace?.[0]?.detail ?? "暂无运行详情"}</span>
+          </section>
+        ) : null}
+      </div>
       <BottomNav active="dashboard" go={go} />
     </div>
   );
@@ -860,54 +862,56 @@ function ProductManagement({ state, setState, go }) {
 
   return (
     <div className="screen with-nav">
-      <Header title="商品管理" left={<BackButton go={go} />} />
-      <div className="tabs product-tabs">
-        {tabs.map(([key, label]) => (
-          <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key)}>{label}</button>
-        ))}
-      </div>
-      <section className="product-list">
-        {visibleProducts.map((product) => (
-          <div className="manage-row" key={product.id}>
-            <img src={product.images[0]} alt={product.title} />
-            <div>
-              <strong>{product.title}</strong>
-              <b>{money(product.price)}</b>
-              <small>{product.createdAt.slice(5, 16)}</small>
-            </div>
-            <span className={product.status === "listed" ? "status listed" : "status"}>{product.status === "listed" ? "已上架" : product.status === "draft" ? "草稿" : product.status === "deleted" ? "已删除" : "已下架"}</span>
-            <div className="row-actions">
-              {product.status !== "deleted" ? (
-                <button onClick={() => {
-                  setState((current) => ({ ...current, selectedProductId: product.id }));
-                  go(`edit-product/${product.id}`);
-                }}><Edit3 size={14} />编辑</button>
-              ) : null}
-              {product.status === "listed" ? (
-                <button className="lifecycle" onClick={() => changeStatus(product, "unlisted")} disabled={statusChangingId === product.id}><Inbox size={14} />下架</button>
-              ) : null}
-              {["draft", "unlisted"].includes(product.status) ? (
-                <button className="lifecycle" onClick={() => changeStatus(product, "listed")} disabled={statusChangingId === product.id}><PackagePlus size={14} />上架</button>
-              ) : null}
-              {product.status === "deleted" ? (
-                <button className="lifecycle" onClick={() => changeStatus(product, "draft")} disabled={statusChangingId === product.id}><PackagePlus size={14} />恢复</button>
-              ) : (
-                <button className="danger-action" onClick={() => setConfirmingDeleteId(product.id)} disabled={deletingId === product.id}><Trash2 size={14} />删除</button>
-              )}
-            </div>
-            {confirmingDeleteId === product.id ? (
-              <div className="row-confirm">
-                <span>删除后买家端不再展示该商品</span>
-                <button type="button" onClick={() => setConfirmingDeleteId(null)} disabled={deletingId === product.id}>取消</button>
-                <button type="button" onClick={() => removeProduct(product)} disabled={deletingId === product.id}>{deletingId === product.id ? "删除中" : "确认删除"}</button>
+      <div className="nav-scroll">
+        <Header title="商品管理" left={<BackButton go={go} />} />
+        <div className="tabs product-tabs">
+          {tabs.map(([key, label]) => (
+            <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key)}>{label}</button>
+          ))}
+        </div>
+        <section className="product-list">
+          {visibleProducts.map((product) => (
+            <div className="manage-row" key={product.id}>
+              <img src={product.images[0]} alt={product.title} />
+              <div>
+                <strong>{product.title}</strong>
+                <b>{money(product.price)}</b>
+                <small>{product.createdAt.slice(5, 16)}</small>
               </div>
-            ) : null}
-          </div>
-        ))}
-        {!visibleProducts.length ? <div className="empty-state">当前分类暂无商品</div> : null}
-        {notice ? <div className="notice-card error">{notice}</div> : null}
-      </section>
-      <button className="primary-button list-action" onClick={() => go("publish")}>+ 发布新商品</button>
+              <span className={product.status === "listed" ? "status listed" : "status"}>{product.status === "listed" ? "已上架" : product.status === "draft" ? "草稿" : product.status === "deleted" ? "已删除" : "已下架"}</span>
+              <div className="row-actions">
+                {product.status !== "deleted" ? (
+                  <button onClick={() => {
+                    setState((current) => ({ ...current, selectedProductId: product.id }));
+                    go(`edit-product/${product.id}`);
+                  }}><Edit3 size={14} />编辑</button>
+                ) : null}
+                {product.status === "listed" ? (
+                  <button className="lifecycle" onClick={() => changeStatus(product, "unlisted")} disabled={statusChangingId === product.id}><Inbox size={14} />下架</button>
+                ) : null}
+                {["draft", "unlisted"].includes(product.status) ? (
+                  <button className="lifecycle" onClick={() => changeStatus(product, "listed")} disabled={statusChangingId === product.id}><PackagePlus size={14} />上架</button>
+                ) : null}
+                {product.status === "deleted" ? (
+                  <button className="lifecycle" onClick={() => changeStatus(product, "draft")} disabled={statusChangingId === product.id}><PackagePlus size={14} />恢复</button>
+                ) : (
+                  <button className="danger-action" onClick={() => setConfirmingDeleteId(product.id)} disabled={deletingId === product.id}><Trash2 size={14} />删除</button>
+                )}
+              </div>
+              {confirmingDeleteId === product.id ? (
+                <div className="row-confirm">
+                  <span>删除后买家端不再展示该商品</span>
+                  <button type="button" onClick={() => setConfirmingDeleteId(null)} disabled={deletingId === product.id}>取消</button>
+                  <button type="button" onClick={() => removeProduct(product)} disabled={deletingId === product.id}>{deletingId === product.id ? "删除中" : "确认删除"}</button>
+                </div>
+              ) : null}
+            </div>
+          ))}
+          {!visibleProducts.length ? <div className="empty-state">当前分类暂无商品</div> : null}
+          {notice ? <div className="notice-card error">{notice}</div> : null}
+        </section>
+        <button className="primary-button list-action" onClick={() => go("publish")}>+ 发布新商品</button>
+      </div>
       <BottomNav active="products" go={go} />
     </div>
   );
@@ -1065,34 +1069,36 @@ function LeadsList({ state, setState, go }) {
 
   return (
     <div className="screen with-nav">
-      <Header title="客资列表" left={<BackButton go={go} />} />
-      <div className="tabs three">
-        {tabs.map(([key, label]) => (
-          <button key={key} className={filter === key ? "active" : ""} onClick={() => selectFilter(key)} disabled={filtering}>{label}</button>
-        ))}
+      <div className="nav-scroll">
+        <Header title="客资列表" left={<BackButton go={go} />} />
+        <div className="tabs three">
+          {tabs.map(([key, label]) => (
+            <button key={key} className={filter === key ? "active" : ""} onClick={() => selectFilter(key)} disabled={filtering}>{label}</button>
+          ))}
+        </div>
+        <section className="lead-list">
+          {filteredLeads.map((lead) => (
+            <button className="lead-line" key={lead.id} onClick={() => {
+              setState((current) => ({ ...current, selectedLeadId: lead.id }));
+              go(`lead/${lead.id}`);
+            }}>
+              <span>{lead.createdAt.slice(5, 16)}</span>
+              <div>
+                <strong>{lead.buyerNeed}</strong>
+                <small>{lead.productTitle}</small>
+              </div>
+              <em>{lead.status === "contacted" ? "已联系" : "待联系"}</em>
+              <small>{maskEmail(lead.buyerEmail)}</small>
+            </button>
+          ))}
+          {!filteredLeads.length ? <div className="empty-state">当前分类暂无客资</div> : null}
+          {notice ? <div className="notice-card error">{notice}</div> : null}
+        </section>
+        <div className="locked-tip">
+          免费商家可查看部分邮箱，升级VIP查看全部
+        </div>
+        <button className="primary-button list-action" onClick={() => go("account")}>开通VIP，查看全部联系方式</button>
       </div>
-      <section className="lead-list">
-        {filteredLeads.map((lead) => (
-          <button className="lead-line" key={lead.id} onClick={() => {
-            setState((current) => ({ ...current, selectedLeadId: lead.id }));
-            go(`lead/${lead.id}`);
-          }}>
-            <span>{lead.createdAt.slice(5, 16)}</span>
-            <div>
-              <strong>{lead.buyerNeed}</strong>
-              <small>{lead.productTitle}</small>
-            </div>
-            <em>{lead.status === "contacted" ? "已联系" : "待联系"}</em>
-            <small>{maskEmail(lead.buyerEmail)}</small>
-          </button>
-        ))}
-        {!filteredLeads.length ? <div className="empty-state">当前分类暂无客资</div> : null}
-        {notice ? <div className="notice-card error">{notice}</div> : null}
-      </section>
-      <div className="locked-tip">
-        免费商家可查看部分邮箱，升级VIP查看全部
-      </div>
-      <button className="primary-button list-action" onClick={() => go("account")}>开通VIP，查看全部联系方式</button>
       <BottomNav active="leads" go={go} />
     </div>
   );

@@ -139,7 +139,20 @@ button:disabled {
 }
 
 .with-nav {
-  padding-bottom: 126px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 76px;
+  overflow: hidden;
+  padding: 0;
+}
+
+.nav-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.nav-scroll::-webkit-scrollbar {
+  width: 0;
 }
 
 .loading {
@@ -157,6 +170,17 @@ button:disabled {
   justify-content: space-between;
   height: 42px;
   margin-bottom: 14px;
+}
+
+.screen > .topbar,
+.nav-scroll > .topbar {
+  position: sticky;
+  top: -16px;
+  z-index: 10;
+  height: 58px;
+  margin: -16px -16px 14px;
+  padding: 16px 16px 0;
+  background: #f7fbf8;
 }
 
 .brand {
@@ -880,10 +904,6 @@ button:disabled {
 }
 
 .bottom-nav {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   z-index: 6;
@@ -982,17 +1002,11 @@ button:disabled {
 }
 
 .fixed-action {
-  position: sticky;
-  bottom: 16px;
-  z-index: 4;
   margin-top: 18px;
   box-shadow: 0 12px 24px rgba(7, 135, 79, 0.18);
 }
 
 .fixed-secondary-actions {
-  position: sticky;
-  bottom: 86px;
-  z-index: 4;
   display: grid;
   margin-top: 12px;
 }
