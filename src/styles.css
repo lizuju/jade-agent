@@ -989,6 +989,24 @@ button:disabled {
   box-shadow: 0 12px 24px rgba(7, 135, 79, 0.18);
 }
 
+.fixed-secondary-actions {
+  position: sticky;
+  bottom: 86px;
+  z-index: 4;
+  display: grid;
+  margin-top: 12px;
+}
+
+.fixed-secondary-actions button {
+  min-height: 48px;
+  border: 1px solid #cfe1d8;
+  border-radius: 8px;
+  color: #07874f;
+  background: #f7fbf8;
+  font-size: 14px;
+  font-weight: 900;
+}
+
 .publish-action {
   margin-top: 18px;
   box-shadow: 0 12px 24px rgba(7, 135, 79, 0.18);
@@ -1071,6 +1089,10 @@ button:disabled {
   overflow: hidden;
   margin: 8px 0 12px;
   border-bottom: 1px solid #e0ebe5;
+}
+
+.tabs.product-tabs {
+  grid-template-columns: repeat(5, 1fr);
 }
 
 .tabs.three {
@@ -1169,7 +1191,11 @@ button:disabled {
   font-size: 11px;
 }
 
-.row-actions button:last-child {
+.row-actions button.lifecycle {
+  color: #07874f;
+}
+
+.row-actions button.danger-action {
   color: #cf3f30;
 }
 
@@ -1193,6 +1219,53 @@ button:disabled {
   color: #8e4b3f;
   font-size: 11px;
   line-height: 1.4;
+}
+
+.lifecycle-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #d8e7df;
+  border-radius: 8px;
+  background: #f7fbf8;
+}
+
+.lifecycle-card div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.lifecycle-card span {
+  color: #71837a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.lifecycle-card strong {
+  color: #17211b;
+  font-size: 15px;
+}
+
+.lifecycle-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.lifecycle-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  color: #07874f;
+  background: #eaf5ef;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.lifecycle-actions button:disabled {
+  cursor: progress;
+  opacity: 0.6;
 }
 
 .row-confirm button,

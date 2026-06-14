@@ -225,7 +225,12 @@ function BuyerHome({ state, setState, go }) {
     }
   ]);
   const listedProducts = state.products.filter((product) => product.status === "listed");
-  const products = state.match?.products?.length ? state.match.products : listedProducts.slice(0, 3);
+  const products = state.match?.products?.length
+    ? state.match.products
+    : state.buyerInteractionMode
+      ? []
+      : listedProducts.slice(0, 3);
+  const activeTrace = state.lastTrace?.length ? state.lastTrace : state.match?.trace;
   const [welcomeMessage, ...conversationMessages] = messages;
   const isThinking = loading || messages.some((message) => message.thinking);
   const thinkingText = `已为您解析需求，正在匹配优质翡翠货源${".".repeat(thinkingDotCount)}`;
@@ -270,7 +275,8 @@ function BuyerHome({ state, setState, go }) {
       setState((current) => ({
         ...current,
         sessionId: result.sessionId,
-        match: result.mode === "customer_service" ? current.match : result,
+        buyerInteractionMode: result.mode,
+        match: result.mode === "match" ? result : null,
         lastTrace: result.trace
       }));
       setMessages((current) => current.map((message) => (
@@ -334,25 +340,27 @@ function BuyerHome({ state, setState, go }) {
           )
         ))}
 
-        <section className="card-section">
-          <h3>为您找到以下优质货源（共{products.length}件）</h3>
-          <div className="product-grid">
-            {products.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
-                onOpen={() => {
-                  setState((current) => ({ ...current, selectedProductId: product.id }));
-                  go(`product/${product.id}`);
-                }}
-              />
-            ))}
-          </div>
-        </section>
+        {products.length ? (
+          <section className="card-section">
+            <h3>为您找到以下优质货源（共{products.length}件）</h3>
+            <div className="product-grid">
+              {products.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  onOpen={() => {
+                    setState((current) => ({ ...current, selectedProductId: product.id }));
+                    go(`product/${product.id}`);
+                  }}
+                />
+              ))}
+            </div>
+          </section>
+        ) : null}
 
-        {state.match?.trace ? (
+        {activeTrace ? (
           <section className="agent-trace">
-            {state.match.trace.map((step) => (
+            {activeTrace.map((step) => (
               <div key={step.label}>
                 <CheckCircle2 size={15} />
                 <span>{step.label}</span>
@@ -580,21 +588,39 @@ function Dashboard({ state, setState, go }) {
 
 function PublishGuide({ state, setState, go }) {
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState("");
   const [images, setImages] = useState(state.publishImages?.length ? state.publishImages : ["/assets/jade-upload-bangle.jpg", "/assets/jade-pendant.jpg"]);
 
-  function uploadImages(event) {
+  async function uploadImages(event) {
     const files = Array.from(event.target.files ?? []);
     if (!files.length) return;
-    const nextImages = [...images, ...files.map((file) => URL.createObjectURL(file))].slice(0, 6);
-    setImages(nextImages);
-    setState((current) => ({ ...current, publishImages: nextImages }));
+    setUploading(true);
     setNotice("");
-    event.target.value = "";
+    try {
+      const payload = await Promise.all(files.slice(0, 6).map((file) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve({ name: file.name, dataUrl: reader.result });
+        reader.onerror = () => reject(new Error("图片读取失败"));
+        reader.readAsDataURL(file);
+      })));
+      const result = await api("/api/uploads/images", {
+        method: "POST",
+        body: JSON.stringify({ files: payload })
+      });
+      const nextImages = [...images, ...result.images].slice(0, 6);
+      setImages(nextImages);
+      setState((current) => ({ ...current, publishImages: nextImages }));
+    } catch (error) {
+      setNotice(`上传失败：${error.message}`);
+    } finally {
+      setUploading(false);
+      event.target.value = "";
+    }
   }
 
   async function generateDraft() {
-    if (loading) return;
+    if (loading || uploading) return;
     setLoading(true);
     setNotice("");
     try {
@@ -617,15 +643,15 @@ function PublishGuide({ state, setState, go }) {
 
   return (
     <div className="screen">
-      <Header title="发布商品" left={<BackButton go={go} />} right={<span className="saving">{loading ? "AI生成中" : "AI辅助"}</span>} />
+      <Header title="发布商品" left={<BackButton go={go} />} right={<span className="saving">{loading ? "AI生成中" : uploading ? "上传中" : "AI辅助"}</span>} />
       <section className="upload-card">
         <div className="step-title"><span>1.</span><strong>上传商品图片</strong><small>上传清晰的翡翠图片，AI将根据图片和描述生成商品文案</small></div>
         <div className="upload-grid">
           {images.map((image) => <img key={image} src={image} alt="上传商品" />)}
           <label className="upload-add">
             <ImagePlus size={28} />
-            <span>上传图片</span>
-            <input type="file" accept="image/*" multiple onChange={uploadImages} />
+            <span>{uploading ? "上传中" : "上传图片"}</span>
+            <input type="file" accept="image/*" multiple onChange={uploadImages} disabled={uploading} />
           </label>
         </div>
         {notice ? <div className="notice-card error">{notice}</div> : null}
@@ -642,9 +668,9 @@ function PublishGuide({ state, setState, go }) {
           </div>
         ))}
       </section>
-      <button className="primary-button publish-action" onClick={generateDraft} disabled={loading}>
+      <button className="primary-button publish-action" onClick={generateDraft} disabled={loading || uploading}>
         <Wand2 size={18} />
-        {loading ? "AI正在生成..." : "AI生成商品信息"}
+        {loading ? "AI正在生成..." : uploading ? "图片上传中..." : "AI生成商品信息"}
       </button>
       <small className="quota-text">免费商家最多发布2件商品，当前已发布1/2件</small>
     </div>
@@ -696,6 +722,7 @@ function ReadOnlyField({ label, value, multiline }) {
 function EditInfo({ state, setState, go }) {
   const [draft, setDraft] = useState(state.draft ?? state.products[0]);
   const [saving, setSaving] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [notice, setNotice] = useState("");
   const set = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
 
@@ -706,7 +733,7 @@ function EditInfo({ state, setState, go }) {
   }
 
   async function publish() {
-    if (saving) return;
+    if (saving || savingDraft) return;
     const validationMessage = validateProductDraft(draft);
     if (validationMessage) {
       setNotice(validationMessage);
@@ -729,6 +756,30 @@ function EditInfo({ state, setState, go }) {
     }
   }
 
+  async function saveDraft() {
+    if (saving || savingDraft) return;
+    const validationMessage = validateProductDraft(draft);
+    if (validationMessage) {
+      setNotice(validationMessage);
+      return;
+    }
+    setSavingDraft(true);
+    setNotice("");
+    try {
+      const result = await api("/api/products", {
+        method: "POST",
+        body: JSON.stringify({ ...draft, status: "draft" })
+      });
+      const appState = await api("/api/app-state");
+      setState((current) => ({ ...current, ...appState, selectedProductId: result.product.id }));
+      go("products");
+    } catch (error) {
+      setNotice(`保存草稿失败：${error.message}`);
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
   return (
     <div className="screen">
       <Header title="编辑商品信息" left={<BackButton go={go} to="publishResult" />} right={<button className="link-btn" onClick={publish} disabled={saving}>{saving ? "保存中" : "保存"}</button>} />
@@ -740,7 +791,10 @@ function EditInfo({ state, setState, go }) {
         <Field label="预估售价（元）" value={String(draft.price)} onChange={(value) => set("price", Number(value) || 0)} />
         {notice ? <div className="notice-card error">{notice}</div> : null}
       </section>
-      <button className="primary-button fixed-action" onClick={publish} disabled={saving}>{saving ? "发布中..." : "确认发布"}</button>
+      <div className="fixed-secondary-actions">
+        <button type="button" onClick={saveDraft} disabled={saving || savingDraft}>{savingDraft ? "保存中..." : "保存草稿"}</button>
+      </div>
+      <button className="primary-button fixed-action" onClick={publish} disabled={saving || savingDraft}>{saving ? "发布中..." : "确认发布"}</button>
     </div>
   );
 }
@@ -748,33 +802,54 @@ function EditInfo({ state, setState, go }) {
 function ProductManagement({ state, setState, go }) {
   const [filter, setFilter] = useState("all");
   const [deletingId, setDeletingId] = useState(null);
+  const [statusChangingId, setStatusChangingId] = useState(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [notice, setNotice] = useState("");
+  const activeProducts = state.products.filter((product) => product.status !== "deleted");
   const counts = {
-    all: state.products.length,
+    all: activeProducts.length,
     listed: state.products.filter((product) => product.status === "listed").length,
     draft: state.products.filter((product) => product.status === "draft").length,
-    unlisted: state.products.filter((product) => product.status === "unlisted").length
+    unlisted: state.products.filter((product) => product.status === "unlisted").length,
+    deleted: state.products.filter((product) => product.status === "deleted").length
   };
-  const visibleProducts = filter === "all" ? state.products : state.products.filter((product) => product.status === filter);
+  const visibleProducts = filter === "all" ? activeProducts : state.products.filter((product) => product.status === filter);
   const tabs = [
     ["all", `全部(${counts.all})`],
     ["listed", `已上架(${counts.listed})`],
     ["draft", `草稿(${counts.draft})`],
-    ["unlisted", `已下架(${counts.unlisted})`]
+    ["unlisted", `已下架(${counts.unlisted})`],
+    ["deleted", `回收站(${counts.deleted})`]
   ];
+
+  async function refreshProducts(selectedProductId) {
+    const appState = await api("/api/app-state");
+    setState((current) => ({
+      ...current,
+      ...appState,
+      selectedProductId: selectedProductId ?? current.selectedProductId
+    }));
+  }
+
+  async function changeStatus(product, status) {
+    setStatusChangingId(product.id);
+    setNotice("");
+    try {
+      await api(`/api/products/${product.id}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
+      await refreshProducts(product.id);
+    } catch (error) {
+      setNotice(`状态更新失败：${error.message}`);
+    } finally {
+      setStatusChangingId(null);
+    }
+  }
 
   async function removeProduct(product) {
     setDeletingId(product.id);
     setNotice("");
     try {
       await api(`/api/products/${product.id}`, { method: "DELETE" });
-      const appState = await api("/api/app-state");
-      setState((current) => ({
-        ...current,
-        ...appState,
-        selectedProductId: current.selectedProductId === product.id ? appState.products[0]?.id : current.selectedProductId
-      }));
+      await refreshProducts(activeProducts.find((item) => item.id !== product.id)?.id);
       setConfirmingDeleteId(null);
     } catch (error) {
       setNotice(`删除失败：${error.message}`);
@@ -786,7 +861,7 @@ function ProductManagement({ state, setState, go }) {
   return (
     <div className="screen with-nav">
       <Header title="商品管理" left={<BackButton go={go} />} />
-      <div className="tabs">
+      <div className="tabs product-tabs">
         {tabs.map(([key, label]) => (
           <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key)}>{label}</button>
         ))}
@@ -800,13 +875,25 @@ function ProductManagement({ state, setState, go }) {
               <b>{money(product.price)}</b>
               <small>{product.createdAt.slice(5, 16)}</small>
             </div>
-            <span className={product.status === "listed" ? "status listed" : "status"}>{product.status === "listed" ? "已上架" : product.status === "draft" ? "草稿" : "已下架"}</span>
+            <span className={product.status === "listed" ? "status listed" : "status"}>{product.status === "listed" ? "已上架" : product.status === "draft" ? "草稿" : product.status === "deleted" ? "已删除" : "已下架"}</span>
             <div className="row-actions">
-              <button onClick={() => {
-                setState((current) => ({ ...current, selectedProductId: product.id }));
-                go(`edit-product/${product.id}`);
-              }}><Edit3 size={14} />编辑</button>
-              <button onClick={() => setConfirmingDeleteId(product.id)} disabled={deletingId === product.id}><Trash2 size={14} />删除</button>
+              {product.status !== "deleted" ? (
+                <button onClick={() => {
+                  setState((current) => ({ ...current, selectedProductId: product.id }));
+                  go(`edit-product/${product.id}`);
+                }}><Edit3 size={14} />编辑</button>
+              ) : null}
+              {product.status === "listed" ? (
+                <button className="lifecycle" onClick={() => changeStatus(product, "unlisted")} disabled={statusChangingId === product.id}><Inbox size={14} />下架</button>
+              ) : null}
+              {["draft", "unlisted"].includes(product.status) ? (
+                <button className="lifecycle" onClick={() => changeStatus(product, "listed")} disabled={statusChangingId === product.id}><PackagePlus size={14} />上架</button>
+              ) : null}
+              {product.status === "deleted" ? (
+                <button className="lifecycle" onClick={() => changeStatus(product, "draft")} disabled={statusChangingId === product.id}><PackagePlus size={14} />恢复</button>
+              ) : (
+                <button className="danger-action" onClick={() => setConfirmingDeleteId(product.id)} disabled={deletingId === product.id}><Trash2 size={14} />删除</button>
+              )}
             </div>
             {confirmingDeleteId === product.id ? (
               <div className="row-confirm">
@@ -830,6 +917,7 @@ function EditProduct({ state, setState, go }) {
   const selected = state.products.find((product) => product.id === state.selectedProductId) ?? state.products[0];
   const [draft, setDraft] = useState(selected);
   const [saving, setSaving] = useState(false);
+  const [statusChanging, setStatusChanging] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [notice, setNotice] = useState("");
@@ -837,10 +925,10 @@ function EditProduct({ state, setState, go }) {
 
   useEffect(() => {
     if (selected) setDraft(selected);
-  }, [selected?.id]);
+  }, [selected?.id, selected?.status]);
 
   async function save() {
-    if (saving) return;
+    if (saving || statusChanging) return;
     const validationMessage = validateProductDraft(draft);
     if (validationMessage) {
       setNotice(validationMessage);
@@ -866,12 +954,28 @@ function EditProduct({ state, setState, go }) {
     try {
       await api(`/api/products/${draft.id}`, { method: "DELETE" });
       const appState = await api("/api/app-state");
-      setState((current) => ({ ...current, ...appState, selectedProductId: appState.products[0]?.id }));
+      const nextProduct = appState.products.find((product) => product.status !== "deleted");
+      setState((current) => ({ ...current, ...appState, selectedProductId: nextProduct?.id }));
       go("products");
     } catch (error) {
       setNotice(`删除失败：${error.message}`);
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function changeStatus(status) {
+    setStatusChanging(true);
+    setNotice("");
+    try {
+      const result = await api(`/api/products/${draft.id}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
+      const appState = await api("/api/app-state");
+      setDraft(result.product);
+      setState((current) => ({ ...current, ...appState, selectedProductId: result.product.id }));
+    } catch (error) {
+      setNotice(`状态更新失败：${error.message}`);
+    } finally {
+      setStatusChanging(false);
     }
   }
 
@@ -886,7 +990,7 @@ function EditProduct({ state, setState, go }) {
 
   return (
     <div className="screen">
-      <Header title="编辑商品" left={<BackButton go={go} to="products" />} right={<button className="danger-link" onClick={() => setConfirmingDelete(true)} disabled={deleting}>{deleting ? "删除中" : "删除"}</button>} />
+      <Header title="编辑商品" left={<BackButton go={go} to="products" />} right={<button className="danger-link" onClick={() => setConfirmingDelete(true)} disabled={deleting || statusChanging}>{deleting ? "删除中" : "删除"}</button>} />
       <div className="hero-image compact">
         <img src={draft.images[0]} alt={draft.title} />
         <span>1/3</span>
@@ -901,6 +1005,22 @@ function EditProduct({ state, setState, go }) {
           </div>
         </section>
       ) : null}
+      <section className="lifecycle-card">
+        <div>
+          <span>当前状态</span>
+          <strong>{draft.status === "listed" ? "已上架" : draft.status === "draft" ? "草稿" : "已下架"}</strong>
+        </div>
+        <div className="lifecycle-actions">
+          {draft.status === "listed" ? (
+            <button type="button" onClick={() => changeStatus("unlisted")} disabled={statusChanging || saving || deleting}>下架商品</button>
+          ) : (
+            <button type="button" onClick={() => changeStatus("listed")} disabled={statusChanging || saving || deleting}>上架商品</button>
+          )}
+          {draft.status !== "draft" ? (
+            <button type="button" onClick={() => changeStatus("draft")} disabled={statusChanging || saving || deleting}>转为草稿</button>
+          ) : null}
+        </div>
+      </section>
       <section className="edit-form">
         <Field label="商品标题" value={draft.title} onChange={(value) => set("title", value)} />
         <Field label="商品卖点" value={draft.intro} onChange={(value) => set("intro", value)} />
@@ -908,7 +1028,7 @@ function EditProduct({ state, setState, go }) {
         <Field label="预估售价（元）" value={String(draft.price)} onChange={(value) => set("price", Number(value) || 0)} />
         {notice ? <div className="notice-card error">{notice}</div> : null}
       </section>
-      <button className="primary-button fixed-action" onClick={save} disabled={saving || deleting}>{saving ? "保存中..." : "保存修改"}</button>
+      <button className="primary-button fixed-action" onClick={save} disabled={saving || deleting || statusChanging}>{saving ? "保存中..." : "保存修改"}</button>
     </div>
   );
 }

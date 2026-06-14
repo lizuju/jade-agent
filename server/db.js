@@ -925,14 +925,22 @@ export function updateProduct(id, input, sellerId) {
   return updated;
 }
 
-export function deleteProduct(id, sellerId) {
+export function updateProductStatus(id, sellerId, status) {
   const result = db.prepare(
-    "UPDATE products SET status = 'deleted', deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND seller_id = ?"
-  ).run(id, sellerId);
+    `UPDATE products
+     SET status = ?,
+         deleted_at = CASE WHEN ? = 'deleted' THEN CURRENT_TIMESTAMP ELSE NULL END,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND seller_id = ?`
+  ).run(status, status, id, sellerId);
   if (result.changes === 0) return null;
-  const deleted = getProduct(id);
-  if (deleted) upsertProductDocument(deleted);
-  return deleted;
+  const updated = getProduct(id);
+  if (updated) upsertProductDocument(updated);
+  return updated;
+}
+
+export function deleteProduct(id, sellerId) {
+  return updateProductStatus(id, sellerId, "deleted");
 }
 
 export function listLeads(sellerId, filter = {}) {
@@ -1048,6 +1056,15 @@ export function getOrCreateSession(id, type, userEmail) {
     "INSERT INTO agent_sessions (id, type, user_email, state_json) VALUES (?, ?, ?, ?)"
   ).run(id, type, userEmail ?? null, encode({}));
   return db.prepare("SELECT * FROM agent_sessions WHERE id = ?").get(id);
+}
+
+export function getSessionState(session) {
+  return decode(session?.state_json, {});
+}
+
+export function updateSessionState(id, state) {
+  db.prepare("UPDATE agent_sessions SET state_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .run(encode(state), id);
 }
 
 export function addMessage(sessionId, role, content, metadata = {}) {

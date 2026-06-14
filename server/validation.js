@@ -1,5 +1,6 @@
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const statuses = new Set(["listed", "draft", "unlisted"]);
+const lifecycleStatuses = new Set(["listed", "draft", "unlisted", "deleted"]);
 const categories = new Set(["手镯", "吊坠", "戒面", "平安扣", "珠链", "手串", "无事牌", "耳坠", "挂件"]);
 const leadStatuses = new Set(["new", "contacted"]);
 export class ValidationError extends Error {
@@ -61,6 +62,12 @@ export function validateProductPayload(body) {
 
   if (details.length) throw new ValidationError("Invalid product", details);
   return { ...body, title, category, price, images, tags, intro, detail, status };
+}
+
+export function validateProductStatusPayload(body) {
+  const status = cleanText(body.status);
+  ensure(lifecycleStatuses.has(status), "Invalid product status", [{ field: "status", message: "商品状态必须是已上架、草稿、已下架或已删除" }]);
+  return { status };
 }
 
 export function validateLeadPayload(body) {

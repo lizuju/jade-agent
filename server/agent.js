@@ -6,9 +6,11 @@ import {
   createLead,
   getSellerLead,
   getOrCreateSession,
+  getSessionState,
   listProducts,
   recordAgentRun,
-  searchProductDocuments
+  searchProductDocuments,
+  updateSessionState
 } from "./db.js";
 
 function safeJson(text, fallback) {
@@ -126,6 +128,7 @@ function makeQueryTerms(value) {
 function expandNeedTerms(need) {
   return makeQueryTerms([
     ...(need.queryTerms ?? []),
+    ...(need.preferenceProfile?.queryTerms ?? []),
     ...(need.color ? colorFamilies[need.color] ?? [need.color] : []),
     ...((need.mustHave ?? []).flatMap((term) => flawFamilies[term] ?? [term]))
   ]);
@@ -153,7 +156,7 @@ function heuristicNeed(need) {
   if (!scenes.includes("自用") && text.includes("自用")) scenes.push("自用");
   const scene = scenes.join("/");
   const tagWords = [...semanticCatalog.waters, ...semanticCatalog.colors, ...semanticCatalog.shapes, ...semanticCatalog.flawTerms, "天然A货", "证书", ...sizes, category];
-  const tags = tagWords.filter((tag) => text.includes(tag.replace("色", "")) || text.includes(tag));
+  const tags = tagWords.filter(Boolean).filter((tag) => text.includes(tag.replace("色", "")) || text.includes(tag));
   const mustHave = makeQueryTerms([
     flaw && ["无纹裂", "无裂", "无纹"].includes(flaw) ? "无纹裂" : flaw,
     text.includes("天然") || text.includes("A货") ? "天然A货" : "",
@@ -384,6 +387,122 @@ function scoreProduct(product, need, retrievalHit) {
   };
 }
 
+function preferenceLabel(profile) {
+  if (!profile) return "";
+  if (profile.price === "premium") return "高货优先";
+  if (profile.price === "lowest") return "低价优先";
+  if (profile.price === "value") return "性价比优先";
+  if (profile.appearance) return "颜值优先";
+  if (profile.quality) return "品质优先";
+  if (profile.water) return "水头优先";
+  if (profile.color) return "颜色优先";
+  if (profile.clarity) return "干净度优先";
+  if (profile.gift) return "送礼优先";
+  return "";
+}
+
+function scoreByTerms(text, terms, points) {
+  return terms.some((term) => text.includes(term)) ? points : 0;
+}
+
+function scoreByTermGroups(text, groups) {
+  for (const [terms, points] of groups) {
+    if (terms.some((term) => text.includes(term))) return points;
+  }
+  return 0;
+}
+
+function productPreferenceScore(product, need, candidatePrices) {
+  const profile = need.preferenceProfile ?? { price: need.pricePreference };
+  if (!candidatePrices.length) return { score: 0, reasons: [] };
+  const evidence = `${product.title} ${product.category} ${product.quality} ${product.water} ${product.color} ${product.shape} ${product.flaws} ${product.scene} ${product.certificate} ${product.detail} ${product.ragText} ${product.tags.join(" ")}`;
+  const maxPrice = Math.max(...candidatePrices);
+  const minPrice = Math.min(...candidatePrices);
+  let score = 0;
+  const reasons = [];
+  const range = Math.max(maxPrice - minPrice, 1);
+  const premiumRank = Math.round(((product.price - minPrice) / range) * 20);
+  const waterRank = scoreByTermGroups(evidence, [
+    [["玻璃种"], 28],
+    [["高冰"], 24],
+    [["冰种", "冰透", "起光", "起胶"], 20],
+    [["糯冰", "冰糯", "水润", "通透"], 14],
+    [["糯种"], 8]
+  ]);
+  const colorRank = scoreByTermGroups(evidence, [
+    [["帝王绿", "正阳绿", "满绿"], 30],
+    [["阳绿", "辣绿", "高绿"], 24],
+    [["飘绿", "飘花"], 18],
+    [["晴底", "晴水", "紫罗兰", "春彩"], 14],
+    [["白冰", "蓝水", "黄翡", "红翡"], 10]
+  ]);
+  const cleanRank = scoreByTermGroups(evidence, [
+    [["无纹裂", "无裂", "无纹", "肉眼干净"], 18],
+    [["微瑕"], 8]
+  ]);
+  if (profile.price === "premium") {
+    score += Math.round(((product.price - minPrice) / range) * 45);
+    reasons.push("高货优先");
+  }
+  if (profile.price === "lowest") {
+    score += Math.round(((maxPrice - product.price) / range) * 45);
+    reasons.push("低价优先");
+  }
+  if (profile.price === "value") {
+    score += Math.round(((maxPrice - product.price) / range) * 25);
+    reasons.push("性价比优先");
+  }
+  if (profile.quality) {
+    score += waterRank;
+    score += Math.round(colorRank * 0.5);
+    score += premiumRank;
+    score += scoreByTerms(evidence, ["天然A货", "证书", "复检"], 8);
+    score += cleanRank;
+    reasons.push("品质优先");
+  }
+  if (profile.appearance) {
+    score += colorRank;
+    score += Math.round(waterRank * 0.7);
+    score += Math.round(cleanRank * 0.5);
+    reasons.push("颜值优先");
+  }
+  if (profile.water) {
+    score += waterRank;
+    reasons.push("水头优先");
+  }
+  if (profile.color) {
+    score += colorRank;
+    reasons.push("颜色优先");
+  }
+  if (profile.clarity) {
+    score += cleanRank;
+    score -= scoreByTerms(evidence, ["微瑕", "石纹", "矿点", "棉絮"], 8);
+    reasons.push("干净度优先");
+  }
+  if (profile.gift) {
+    score += scoreByTerms(evidence, ["送礼", "礼赠", "证书", "复检", "天然A货", "精美"], 16);
+    score += Math.round((colorRank + waterRank + cleanRank) * 0.35);
+    score += Math.min(premiumRank, 12);
+    reasons.push("送礼优先");
+  }
+  return { score: Math.max(0, score), reasons: [...new Set(reasons)] };
+}
+
+function applyPreferenceProfile(product, need, candidatePrices) {
+  const preference = productPreferenceScore(product, need, candidatePrices);
+  if (!preference.score) return product;
+  return {
+    ...product,
+    matchScore: product.matchScore + preference.score,
+    matchReasons: [...new Set([...preference.reasons, ...(product.matchReasons ?? [])])].slice(0, 6),
+    agentScore: {
+      ...product.agentScore,
+      total: product.agentScore.total + preference.score,
+      preference: preference.score
+    }
+  };
+}
+
 function buyerNeedSummary(need) {
   const quality = [need.water, need.color].filter(Boolean).join("");
   const parts = makeQueryTerms([
@@ -391,36 +510,176 @@ function buyerNeedSummary(need) {
     quality,
     need.shape,
     ...(need.sizes ?? []),
-    ...(need.mustHave ?? [])
+    ...(need.mustHave ?? []),
+    ...(need.preferenceProfile?.labels ?? []),
+    preferenceLabel(need.preferenceProfile)
   ]);
   const scene = need.occasion ? `适用场景：${need.occasion}` : "";
   const budget = need.budget ? `预算约￥${Math.round(need.budget).toLocaleString("zh-CN")}` : "未限定预算";
   return [...parts, scene, budget].filter(Boolean).join("、");
 }
 
-function isCustomerServiceTurn(rawNeed, parsedNeed) {
+function hasNeedSlot(need) {
+  return Boolean(
+    need?.category ||
+    need?.budget ||
+    need?.water ||
+    need?.color ||
+    need?.shape ||
+    need?.sizes?.length ||
+    need?.mustHave?.length
+  );
+}
+
+function hasProductConstraint(need) {
+  return Boolean(
+    need?.category ||
+    need?.budget ||
+    need?.water ||
+    need?.color ||
+    need?.shape ||
+    need?.sizes?.length ||
+    need?.mustHave?.length ||
+    need?.certificateRequired
+  );
+}
+
+function pricePreference(text) {
+  if (/最贵|贵的|高货|预算不限|不要便宜|最高价|价格高/.test(text)) return "premium";
+  if (/最便宜|最低价|价格最低|越便宜越好/.test(text)) return "lowest";
+  if (/便宜|实惠|性价比|划算|入门|低预算/.test(text)) return "value";
+  return "";
+}
+
+function extractPreferenceProfile(rawText) {
+  const text = String(rawText ?? "").trim();
+  const profile = {
+    price: pricePreference(text),
+    appearance: /漂亮|好看|颜值|成色|品相|显气质|高级感/.test(text),
+    quality: /品质|品相|成色|收藏|顶级|高货|最好的|品质最好|种老|起光|起胶/.test(text),
+    water: /水头|种水|通透|冰透|水润|起光|起胶/.test(text),
+    color: /颜色|色正|色阳|色辣|满色|满绿|阳绿|帝王绿|飘花|飘绿|春彩|紫罗兰|晴底/.test(text),
+    clarity: /无瑕|干净|无纹裂|无裂|无纹|少棉|少瑕|瑕疵少/.test(text),
+    gift: /送礼|礼物|体面|拿得出手|长辈|妈妈|女朋友|老婆/.test(text),
+    certificate: /证书|复检|保真|天然A货|A货/.test(text),
+    openCategory: acceptsAnyCategory(text),
+    labels: [],
+    queryTerms: []
+  };
+  const labelMap = [
+    [profile.price === "premium", "高货"],
+    [profile.price === "lowest", "低价"],
+    [profile.price === "value", "性价比"],
+    [profile.appearance, "颜值"],
+    [profile.quality, "品质"],
+    [profile.water, "水头"],
+    [profile.color, "颜色"],
+    [profile.clarity, "干净"],
+    [profile.gift, "送礼"],
+    [profile.certificate, "证书"]
+  ];
+  profile.labels = labelMap.filter(([matched]) => matched).map(([, label]) => label);
+  profile.queryTerms = [...profile.labels];
+  return profile;
+}
+
+function hasActionablePreference(profile) {
+  return Boolean(
+    profile?.price ||
+    profile?.appearance ||
+    profile?.quality ||
+    profile?.water ||
+    profile?.color ||
+    profile?.clarity ||
+    profile?.gift ||
+    profile?.certificate
+  );
+}
+
+function acceptsAnyCategory(text) {
+  return /品类.*都可以|品种.*都可以|类型.*都可以|款式.*都可以|什么.*都可以|不限品类|不限品种|都行|随便/.test(text);
+}
+
+function isRefinementText(text) {
+  return /再来|换一批|换个|只要|不要|必须|优先|更|最|贵|便宜|证书|无纹|无裂|微瑕|送礼|自用/.test(text);
+}
+
+function classifyBuyerIntent(rawNeed, parsedNeed, previousParsedNeed) {
   const text = String(rawNeed ?? "").trim();
   const lower = text.toLowerCase();
-  const hasFindSignal = Boolean(
-    parsedNeed.category ||
-    parsedNeed.budget ||
-    parsedNeed.water ||
-    parsedNeed.color ||
-    parsedNeed.shape ||
-    parsedNeed.sizes?.length ||
-    parsedNeed.mustHave?.length
-  );
+  const hasFindSignal = hasNeedSlot(parsedNeed);
+  const hasPreviousFindSignal = hasNeedSlot(previousParsedNeed);
+  const preferenceProfile = extractPreferenceProfile(text);
+  const preference = preferenceProfile.price;
+  const acceptsOpenCategory = preferenceProfile.openCategory;
+  const hasPreference = hasActionablePreference(preferenceProfile);
+  const isRefinement = isRefinementText(text);
   const asksKnowledgeOnly = /什么|怎么|如何|区别|真假|鉴定|保养|证书|a货|值吗|好吗|可以吗|[?？]/i.test(text) &&
     !/找|买|推荐|预算|价位|价格|有没有|货源|看货|送礼|自用|需要|想要/.test(text);
 
-  if (!hasFindSignal) return true;
-  if (asksKnowledgeOnly && !parsedNeed.category && !parsedNeed.budget) return true;
-  if (/^(你好|您好|hi|hello|在吗|谢谢|thank)/i.test(lower) && !hasFindSignal) return true;
-  return false;
+  if (hasPreviousFindSignal && !hasFindSignal && (hasPreference || isRefinement)) {
+    return { mode: "refine", pricePreference: preference, preferenceProfile, reason: "基于上一轮需求补充偏好" };
+  }
+  if (hasFindSignal) {
+    return { mode: "match", pricePreference: preference, preferenceProfile, reason: "识别到找货槽位" };
+  }
+  if (hasPreference) {
+    return { mode: "match", pricePreference: preference, preferenceProfile, reason: acceptsOpenCategory ? "开放品类找货" : "开放偏好找货" };
+  }
+  if (isRefinement) {
+    return { mode: "clarify", pricePreference: preference, preferenceProfile, reason: "有偏好但缺少品类或上一轮找货上下文" };
+  }
+  if (asksKnowledgeOnly) return { mode: "service", pricePreference: "", preferenceProfile, reason: "翡翠知识或客服咨询" };
+  if (/^(你好|您好|hi|hello|在吗|谢谢|thank)/i.test(lower)) return { mode: "service", pricePreference: "", preferenceProfile, reason: "寒暄或客服对话" };
+  return { mode: "service", pricePreference: "", preferenceProfile, reason: "未识别到找货意图" };
 }
 
-function localBuyerServiceReply(rawNeed, parsedNeed) {
+function mergeParsedNeed(previousNeed, currentNeed, intent) {
+  if (intent.mode !== "refine" || !previousNeed) {
+    const merged = { ...currentNeed, pricePreference: intent.pricePreference, preferenceProfile: intent.preferenceProfile };
+    merged.queryTerms = makeQueryTerms([...(merged.queryTerms ?? []), ...(intent.preferenceProfile?.queryTerms ?? [])]);
+    return merged;
+  }
+  const merged = {
+    ...previousNeed,
+    ...currentNeed,
+    category: currentNeed.category || previousNeed.category || "",
+    budget: currentNeed.budget ?? previousNeed.budget ?? null,
+    occasion: currentNeed.occasion || previousNeed.occasion || "",
+    water: currentNeed.water || previousNeed.water || "",
+    color: currentNeed.color || previousNeed.color || "",
+    shape: currentNeed.shape || previousNeed.shape || "",
+    treatment: currentNeed.treatment || previousNeed.treatment || "",
+    certificateRequired: currentNeed.certificateRequired || previousNeed.certificateRequired || false,
+    sizes: currentNeed.sizes?.length ? currentNeed.sizes : previousNeed.sizes ?? [],
+    tags: makeQueryTerms([...(previousNeed.tags ?? []), ...(currentNeed.tags ?? [])]),
+    mustHave: makeQueryTerms([...(previousNeed.mustHave ?? []), ...(currentNeed.mustHave ?? [])]),
+    queryTerms: makeQueryTerms([...(previousNeed.queryTerms ?? []), ...(currentNeed.queryTerms ?? [])]),
+    confidence: Math.max(currentNeed.confidence ?? 0, previousNeed.confidence ?? 0),
+    pricePreference: intent.pricePreference || currentNeed.pricePreference || previousNeed.pricePreference || "",
+    preferenceProfile: {
+      ...(previousNeed.preferenceProfile ?? {}),
+      ...(currentNeed.preferenceProfile ?? {}),
+      ...(intent.preferenceProfile ?? {}),
+      labels: makeQueryTerms([...(previousNeed.preferenceProfile?.labels ?? []), ...(currentNeed.preferenceProfile?.labels ?? []), ...(intent.preferenceProfile?.labels ?? [])]),
+      queryTerms: makeQueryTerms([...(previousNeed.preferenceProfile?.queryTerms ?? []), ...(currentNeed.preferenceProfile?.queryTerms ?? []), ...(intent.preferenceProfile?.queryTerms ?? [])])
+    }
+  };
+  merged.queryTerms = makeQueryTerms([...(merged.queryTerms ?? []), ...(merged.preferenceProfile.queryTerms ?? [])]);
+  return merged;
+}
+
+function localBuyerServiceReply(rawNeed, parsedNeed, intent) {
   const text = String(rawNeed ?? "").trim();
+  if (intent?.mode === "clarify") {
+    if (intent.pricePreference === "premium") {
+      return "可以按高货优先帮您找，但需要先确认品类，比如手镯、吊坠、戒面，以及预算或尺寸范围。";
+    }
+    if (intent.pricePreference === "lowest") {
+      return "可以按低价优先帮您找。请补充想看的品类，或直接说不限品类，我会从全库筛选。";
+    }
+    return "可以继续细化。请补充想看的品类、预算、尺寸或用途，我会按您的偏好重新匹配货源。";
+  }
   if (/^(你好|您好|hi|hello|在吗)/i.test(text)) {
     return "您好，我是翡翠找货客服。您可以直接说预算、品类、圈口或尺寸、种水颜色、是否送礼，我会帮您整理需求并匹配货源。";
   }
@@ -430,12 +689,13 @@ function localBuyerServiceReply(rawNeed, parsedNeed) {
   return "我主要负责翡翠找货、商品咨询和需求整理。您可以告诉我想看手镯、吊坠还是其他品类，以及预算和佩戴或送礼场景。";
 }
 
-async function writeBuyerServiceReply(rawNeed, parsedNeed) {
-  const fallback = localBuyerServiceReply(rawNeed, parsedNeed);
+async function writeBuyerServiceReply(rawNeed, parsedNeed, intent) {
+  const fallback = localBuyerServiceReply(rawNeed, parsedNeed, intent);
   const result = await completeTextResult(`你是翡翠平台的买家客服和找货顾问。用户输入可能是寒暄、不相关内容、翡翠知识问题，或信息不足的找货需求。请自然回应，不要虚构库存、价格或证书。
 如果用户不是在明确找货，先以客服人格回答或承接，再引导用户补充预算、品类、圈口/尺寸、种水颜色、瑕疵要求、用途。
 如果用户问到非翡翠话题，可以简短回应并把对话自然带回翡翠咨询。中文回复，80字以内，不要固定模板。
 用户输入：${rawNeed}
+意图识别：${JSON.stringify(intent)}
 已识别信息：${JSON.stringify(parsedNeed)}`);
   const reply = textOr(result.text, fallback).replace(/\s+/g, " ").trim();
   return {
@@ -474,10 +734,12 @@ const BuyerMatchGraphState = Annotation.Root({
   buyerEmail: Annotation(),
   candidates: Annotation(),
   inventory: Annotation(),
+  intent: Annotation(),
   mode: Annotation(),
   need: Annotation(),
   parsedNeed: Annotation(),
   products: Annotation(),
+  previousParsedNeed: Annotation(),
   reply: Annotation(),
   retrieval: Annotation(),
   retrievalByProduct: Annotation(),
@@ -489,28 +751,33 @@ const BuyerMatchGraphState = Annotation.Root({
 });
 
 async function parseBuyerNeedNode(state) {
-  const parsedNeed = await analyzeNeed(state.need);
+  const currentNeed = await analyzeNeed(state.need);
+  const previousParsedNeed = state.previousParsedNeed ?? state.parsedNeed;
+  const intent = classifyBuyerIntent(state.need, currentNeed, previousParsedNeed);
+  const parsedNeed = mergeParsedNeed(previousParsedNeed, currentNeed, intent);
   return {
+    intent,
     parsedNeed,
     validation: validateNeedRules(parsedNeed)
   };
 }
 
 function routeBuyerNeed(state) {
-  return isCustomerServiceTurn(state.need, state.parsedNeed) ? "service" : "retrieve";
+  return ["match", "refine"].includes(state.intent?.mode) ? "retrieve" : "service";
 }
 
 async function buyerServiceNode(state) {
-  const service = await writeBuyerServiceReply(state.need, state.parsedNeed);
+  const service = await writeBuyerServiceReply(state.need, state.parsedNeed, state.intent);
   const trace = [
     { label: "请求边界校验", detail: `消息 ${String(state.need).length} 字，邮箱 ${state.buyerEmail ? "有效" : "未提供"}` },
-    { label: "意图识别 Agent", detail: "客服对话 / 信息不足，未进入商品 RAG 检索" },
+    { label: "意图识别 Agent", detail: `${state.intent?.mode ?? "service"}：${state.intent?.reason ?? "客服对话 / 信息不足，未进入商品 RAG 检索"}` },
     { label: "语义识别 Agent", detail: `${state.parsedNeed.queryTerms.join("、") || "无检索词"} / 置信度 ${Math.round((state.parsedNeed.confidence ?? 0) * 100)}%` },
     { label: "LangGraph状态", detail: semanticEngineDetail(state.parsedNeed) },
     { label: "客服回复 Agent", detail: service.providerError ? `${service.provider} 暂不可用，已使用本地客服兜底` : `${service.provider} 生成回复，耗时 ${service.providerDurationMs}ms` }
   ];
   return {
     mode: "customer_service",
+    intent: state.intent,
     products: [],
     reply: service.reply,
     retrieval: { documents: [] },
@@ -529,6 +796,7 @@ function retrieveBuyerProductsNode(state) {
     limit: 18
   });
   const retrievalByProduct = new Map(retrievalDocs.map((doc) => [doc.productId, doc]));
+  const preferenceOnly = hasActionablePreference(state.parsedNeed.preferenceProfile) && !hasProductConstraint(state.parsedNeed);
   const budgetCandidateIds = state.parsedNeed.budget
     ? inventory
       .filter((product) => !state.parsedNeed.category || product.category === state.parsedNeed.category)
@@ -539,7 +807,7 @@ function retrieveBuyerProductsNode(state) {
       .map((product) => product.id)
     : [];
   const candidateIds = new Set([
-    ...(retrievalDocs.length ? retrievalDocs.map((doc) => doc.productId) : inventory.map((product) => product.id)),
+    ...(retrievalDocs.length && !preferenceOnly ? retrievalDocs.map((doc) => doc.productId) : inventory.map((product) => product.id)),
     ...budgetCandidateIds
   ]);
   const highBudgetFloor = state.parsedNeed.budget >= 80000 ? state.parsedNeed.budget * 0.45 : 0;
@@ -554,9 +822,11 @@ function retrieveBuyerProductsNode(state) {
 }
 
 function rankBuyerProductsNode(state) {
+  const candidatePrices = state.candidates.map((product) => product.price).filter(Number.isFinite);
   return {
     products: state.candidates
       .map((product) => scoreProduct(product, state.parsedNeed, state.retrievalByProduct.get(product.id)))
+      .map((product) => applyPreferenceProfile(product, state.parsedNeed, candidatePrices))
       .sort((a, b) => b.matchScore - a.matchScore)
       .slice(0, 3)
   };
@@ -576,6 +846,7 @@ async function writeBuyerMatchReplyNode(state) {
   }
   const trace = [
     { label: "请求边界校验", detail: `需求 ${String(state.need).length} 字，邮箱 ${state.buyerEmail ? "有效" : "未提供"}` },
+    { label: "意图识别 Agent", detail: `${state.intent?.mode ?? "match"}：${state.intent?.reason ?? "找货需求"}${state.parsedNeed.preferenceProfile?.labels?.length ? `，${state.parsedNeed.preferenceProfile.labels.join("、")}优先` : ""}` },
     { label: "语义识别 Agent", detail: `${state.parsedNeed.category || "未限定品类"} / ${state.parsedNeed.budget ? `￥${Math.round(state.parsedNeed.budget).toLocaleString("zh-CN")}` : "未限定预算"} / ${state.parsedNeed.queryTerms.join("、") || "无检索词"} / 置信度 ${Math.round((state.parsedNeed.confidence ?? 0) * 100)}%` },
     { label: "LangGraph状态", detail: semanticEngineDetail(state.parsedNeed) },
     { label: "规则校验 Agent", detail: `${state.validation.passed.join("；") || "基础规则通过"}${state.validation.warnings.length ? `；提醒：${state.validation.warnings.join("；")}` : ""}` },
@@ -594,10 +865,10 @@ async function writeBuyerMatchReplyNode(state) {
       snippet: doc.snippet
     }))
   };
-  return { mode: "match", reply, retrieval, trace };
+  return { mode: "match", intent: state.intent, reply, retrieval, trace };
 }
 
-const buyerMatchGraph = new StateGraph(BuyerMatchGraphState)
+export const buyerMatchGraph = new StateGraph(BuyerMatchGraphState)
   .addNode("parse_need", parseBuyerNeedNode)
   .addNode("customer_service", buyerServiceNode)
   .addNode("retrieve_products", retrieveBuyerProductsNode)
@@ -618,13 +889,19 @@ export async function runBuyerMatchAgent({ sessionId, need, buyerEmail }) {
   const runId = randomUUID();
   const id = sessionId || randomUUID();
   try {
-    getOrCreateSession(id, "buyer_match", buyerEmail);
+    const session = getOrCreateSession(id, "buyer_match", buyerEmail);
+    const sessionState = getSessionState(session);
     addMessage(id, "user", need);
 
-    const result = await buyerMatchGraph.invoke({ buyerEmail, need });
+    const result = await buyerMatchGraph.invoke({
+      buyerEmail,
+      need,
+      previousParsedNeed: sessionState.lastParsedNeed
+    });
     const products = result.products ?? [];
     const metadata = {
       mode: result.mode,
+      intent: result.intent,
       parsedNeed: result.parsedNeed,
       validation: result.validation,
       retrieval: result.retrieval,
@@ -633,17 +910,25 @@ export async function runBuyerMatchAgent({ sessionId, need, buyerEmail }) {
     };
 
     addMessage(id, "assistant", result.reply, metadata);
+    updateSessionState(id, {
+      ...sessionState,
+      lastMode: result.mode,
+      lastIntent: result.intent,
+      lastNeed: need,
+      lastParsedNeed: result.mode === "match" ? result.parsedNeed : sessionState.lastParsedNeed,
+      lastProductIds: products.map((product) => product.id)
+    });
     recordAgentRun({
       id: runId,
       sessionId: id,
       agentType: "buyer_match",
       input: { need, buyerEmail },
-      output: { mode: result.mode, reply: result.reply, parsedNeed: result.parsedNeed, validation: result.validation, retrieval: result.retrieval, productIds: metadata.productIds },
+      output: { mode: result.mode, intent: result.intent, reply: result.reply, parsedNeed: result.parsedNeed, validation: result.validation, retrieval: result.retrieval, productIds: metadata.productIds },
       trace: result.trace,
       status: "completed"
     });
 
-    return { runId, sessionId: id, mode: result.mode, reply: result.reply, parsedNeed: result.parsedNeed, validation: result.validation, retrieval: result.retrieval, products, trace: result.trace };
+    return { runId, sessionId: id, mode: result.mode, intent: result.intent, reply: result.reply, parsedNeed: result.parsedNeed, validation: result.validation, retrieval: result.retrieval, products, trace: result.trace };
   } catch (error) {
     const trace = [{ label: "Agent失败", detail: publicError(error) }];
     recordAgentRun({

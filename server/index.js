@@ -1,5 +1,8 @@
 import express from "express";
 import cors from "cors";
+import fs from "node:fs";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
 import {
   createLead,
   createProduct,
@@ -14,6 +17,7 @@ import {
   markLeadContacted,
   seedDatabase,
   updateProduct,
+  updateProductStatus,
   upsertSeller
 } from "./db.js";
 import {
@@ -29,15 +33,20 @@ import {
   validateLeadStatus,
   validateLimit,
   validateProductPayload,
+  validateProductStatusPayload,
   validatePublishPayload
 } from "./validation.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
 const devOtpCode = process.env.DEV_OTP_CODE ?? "123456";
+const uploadDir = path.join(process.cwd(), "public", "uploads");
+
+fs.mkdirSync(uploadDir, { recursive: true });
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+app.use("/uploads", express.static(uploadDir));
 
 function bearerToken(req) {
   const header = req.get("authorization") ?? "";
@@ -53,6 +62,16 @@ function requireSeller(req, res, next) {
   if (!seller) return res.status(401).json({ error: "Unauthorized" });
   req.seller = seller;
   next();
+}
+
+function saveUploadedImage(file) {
+  const match = String(file.dataUrl ?? "").match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,(.+)$/);
+  if (!match) throw new ValidationError("Invalid upload", [{ field: "images", message: "只支持 png、jpg、jpeg 或 webp 图片" }]);
+  const ext = match[1].split("/")[1].replace("jpeg", "jpg");
+  const buffer = Buffer.from(match[2], "base64");
+  const filename = `${Date.now()}-${randomBytes(5).toString("hex")}.${ext}`;
+  fs.writeFileSync(path.join(uploadDir, filename), buffer);
+  return `/uploads/${filename}`;
 }
 
 app.get("/", (_req, res) => {
@@ -91,8 +110,9 @@ app.get("/api/health", (_req, res) => {
 
 app.get("/api/app-state", (req, res) => {
   const seller = optionalSeller(req);
-  const products = listProducts(seller ? { sellerId: seller.id } : { publicOnly: true });
+  const products = listProducts(seller ? { sellerId: seller.id, includeDeleted: true } : { publicOnly: true });
   const leads = seller ? listLeads(seller.id) : [];
+  const activeProducts = products.filter((product) => product.status !== "deleted");
   res.json({
     seller,
     products,
@@ -101,7 +121,9 @@ app.get("/api/app-state", (req, res) => {
       listedProducts: products.filter((product) => product.status === "listed").length,
       productQuota: 100,
       todayLeads: leads.filter((lead) => lead.createdAt.startsWith("2026-05-20")).length,
-      totalLeads: leads.length + 125
+      totalLeads: leads.length + 125,
+      managedProducts: activeProducts.length,
+      deletedProducts: products.length - activeProducts.length
     }
   });
 });
@@ -126,9 +148,22 @@ app.post("/api/products", requireSeller, (req, res) => {
   res.status(201).json({ product: createProduct({ ...product, sellerId: req.seller.id }) });
 });
 
+app.post("/api/uploads/images", requireSeller, (req, res) => {
+  const files = Array.isArray(req.body.files) ? req.body.files.slice(0, 6) : [];
+  if (!files.length) throw new ValidationError("Invalid upload", [{ field: "images", message: "请选择要上传的商品图片" }]);
+  res.status(201).json({ images: files.map(saveUploadedImage) });
+});
+
 app.put("/api/products/:id", requireSeller, (req, res) => {
   const payload = validateProductPayload(req.body);
   const product = updateProduct(req.params.id, payload, req.seller.id);
+  if (!product) return res.status(404).json({ error: "Product not found" });
+  res.json({ product });
+});
+
+app.patch("/api/products/:id/status", requireSeller, (req, res) => {
+  const { status } = validateProductStatusPayload(req.body);
+  const product = updateProductStatus(req.params.id, req.seller.id, status);
   if (!product) return res.status(404).json({ error: "Product not found" });
   res.json({ product });
 });
@@ -187,6 +222,9 @@ app.get("/api/agent/capabilities", (_req, res) => {
       "frontend_need_validation",
       "backend_payload_validation",
       "langgraph_state_graph_orchestration",
+      "deterministic_intent_routing",
+      "session_context_refinement",
+      "multi_dimensional_preference_profile",
       "semantic_need_recognition",
       "rule_validation",
       "product_documents_rag_retrieval",
