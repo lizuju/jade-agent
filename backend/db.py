@@ -163,6 +163,26 @@ CREATE TABLE IF NOT EXISTS product_documents (
   UNIQUE(product_id, chunk_type),
   FOREIGN KEY (product_id) REFERENCES products(id)
 );
+CREATE TABLE IF NOT EXISTS query_concepts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,
+  value TEXT NOT NULL,
+  label TEXT NOT NULL,
+  weight INTEGER NOT NULL DEFAULT 10,
+  synonyms_json TEXT NOT NULL,
+  product_terms_json TEXT NOT NULL,
+  UNIQUE(type, value)
+);
+CREATE TABLE IF NOT EXISTS query_understanding_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  raw_text TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  signals_json TEXT NOT NULL,
+  parsed_need_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE UNIQUE INDEX IF NOT EXISTS products_sku_idx ON products(sku) WHERE sku IS NOT NULL;
 """
     )
@@ -494,6 +514,8 @@ def list_leads(seller_id=None, filter_data=None):
     rows = db.execute(
         """
         SELECT l.*, p.title AS product_title, p.price AS product_price, p.images_json,
+               p.category AS product_category, p.status AS product_status, p.sku AS product_sku,
+               p.intro AS product_intro,
                s.email AS seller_email, s.name AS seller_name
         FROM leads l
         JOIN products p ON p.id = l.product_id
@@ -516,6 +538,10 @@ def list_leads(seller_id=None, filter_data=None):
         "productTitle": row["product_title"],
         "productPrice": row["product_price"],
         "productImage": (decode(row["images_json"], []) or [None])[0],
+        "productCategory": row["product_category"],
+        "productStatus": row["product_status"],
+        "productSku": row["product_sku"],
+        "productIntro": row["product_intro"],
         "sellerEmail": row["seller_email"],
         "sellerName": row["seller_name"],
     } for row in rows]
@@ -564,6 +590,7 @@ def mark_lead_contacted(lead_id, seller_id):
 def search_terms_from_text(text):
     source = str(text or "").lower()
     domain_terms = [
+        "翡翠",
         "手镯", "吊坠", "戒面", "平安扣", "珠链", "手串", "无事牌", "耳坠", "挂件",
         "豆种", "冰种", "冰糯", "糯冰", "糯种", "高冰", "玻璃种", "晴底", "晴水",
         "白冰", "飘花", "飘绿", "阳绿", "正阳绿", "满绿", "辣绿", "帝王绿", "蓝水",
@@ -689,6 +716,102 @@ def list_agent_runs(filter_data=None):
     return runs
 
 
+def seed_query_concepts():
+    concepts = [
+        ("category", "手镯", "手镯", 50, ["手镯", "镯子", "玉镯", "翡翠镯", "翡翠手镯", "圆镯"], ["手镯", "正圈", "圆条", "贵妃"]),
+        ("category", "吊坠", "吊坠", 50, ["吊坠", "坠子", "挂坠", "项坠", "链坠", "脖子上戴", "戴脖子", "脖子戴", "颈部佩戴", "佛公", "观音", "叶子", "如意", "葫芦"], ["吊坠", "水滴", "如意", "佛公", "观音", "叶子", "葫芦"]),
+        ("category", "戒面", "戒面", 50, ["戒面", "戒指面", "蛋面", "裸石", "戒指主石", "戒指"], ["戒面", "蛋面", "马鞍", "随形"]),
+        ("category", "平安扣", "平安扣", 50, ["平安扣", "怀古扣", "圆扣", "扣子"], ["平安扣", "圆扣", "怀古扣"]),
+        ("category", "珠链", "珠链", 50, ["珠链", "项链", "翡翠项链", "颈链", "链子", "珠子项链"], ["珠链", "项链", "圆珠", "算盘珠"]),
+        ("category", "手串", "手串", 50, ["手串", "手链", "串珠", "珠串", "手珠"], ["手串", "圆珠", "算盘珠"]),
+        ("category", "无事牌", "无事牌", 50, ["无事牌", "牌子", "素牌", "山水牌", "龙牌"], ["无事牌", "素牌", "山水牌", "龙牌"]),
+        ("category", "耳坠", "耳坠", 50, ["耳坠", "耳饰", "耳环", "耳钉"], ["耳坠", "水滴", "葫芦", "蛋面"]),
+        ("category", "挂件", "挂件", 50, ["挂件", "挂饰", "车挂", "包挂"], ["挂件", "佛公", "观音", "如意", "叶子", "葫芦"]),
+        ("color", "蓝水", "偏蓝色", 46, ["偏蓝色", "偏蓝", "蓝色", "蓝水", "蓝调", "冷色调", "蓝绿色", "蓝底"], ["蓝水", "蓝色", "晴水"]),
+        ("color", "晴底", "晴底色", 44, ["晴底", "晴水", "晴底色", "淡晴", "晴色", "清爽底色"], ["晴底", "晴底色", "晴水"]),
+        ("color", "白冰", "白冰", 42, ["白冰", "冰白", "白色", "无色", "干净白", "透明白"], ["白冰", "冰白", "玻璃种", "冰种"]),
+        ("color", "飘绿", "飘绿", 42, ["飘绿", "带点绿", "一点绿", "有点绿", "绿花", "飘花带绿"], ["飘绿", "飘花", "阳绿"]),
+        ("color", "阳绿", "阳绿", 44, ["阳绿", "绿色", "偏绿", "绿的", "鲜绿", "辣一点绿"], ["阳绿", "正阳绿", "满绿", "辣绿", "飘绿"]),
+        ("color", "帝王绿", "帝王绿", 48, ["帝王绿", "顶级绿", "最好的绿", "浓绿", "满色高绿"], ["帝王绿", "正阳绿", "满绿"]),
+        ("color", "紫罗兰", "紫罗兰", 40, ["紫罗兰", "紫色", "偏紫", "春色", "春彩"], ["紫罗兰", "春彩"]),
+        ("color", "黄翡", "黄翡", 38, ["黄翡", "黄色", "偏黄", "金黄"], ["黄翡"]),
+        ("color", "红翡", "红翡", 38, ["红翡", "红色", "偏红"], ["红翡"]),
+        ("color", "墨翠", "墨翠", 38, ["墨翠", "黑色", "偏黑", "深色"], ["墨翠", "蓝水"]),
+        ("water", "玻璃种", "玻璃种", 46, ["透明", "透明一点", "玻璃感", "很透", "特别透", "通透感强"], ["玻璃种", "高冰", "冰种"]),
+        ("water", "高冰", "高冰", 44, ["高冰", "冰透", "冰感强", "透一点", "水头很好"], ["高冰", "冰种", "玻璃种"]),
+        ("water", "冰种", "冰种", 42, ["冰种", "水润", "水头好", "通透", "清透", "有冰感"], ["冰种", "高冰", "玻璃种"]),
+        ("price_tier", "premium", "高货", 42, ["最贵", "贵的", "高货", "预算不限", "不要便宜", "最高价", "价格高", "越贵越好"], ["玻璃种", "高冰", "帝王绿", "正阳绿", "满绿", "收藏", "精品货源", "起光", "起胶"]),
+        ("price_tier", "lowest", "低价", 38, ["最便宜", "最低价", "价格最低", "越便宜越好", "便宜点"], ["豆种", "糯种", "入门", "自用"]),
+        ("price_tier", "mid", "中等价位", 40, ["中等价格", "中等价位", "中等预算", "价格适中", "价位适中", "中端", "中档", "普通价位", "不要太贵也不要太便宜"], ["糯冰", "冰糯", "冰种", "日常佩戴", "自用"]),
+        ("price_tier", "value", "性价比", 34, ["便宜", "实惠", "性价比", "划算", "入门", "低预算"], ["糯种", "糯冰", "自用", "入门"]),
+        ("occasion", "elder_gift", "长辈送礼", 30, ["妈妈戴", "母亲戴", "长辈戴", "老人戴", "给老人", "送妈妈", "送母亲", "送长辈", "婆婆", "岳母"], ["送礼", "节日礼赠", "无纹裂", "证书", "复检", "天然A货", "正圈", "圆条"]),
+        ("occasion", "gift", "送礼", 22, ["送礼", "礼物", "礼赠", "送人"], ["送礼", "节日礼赠", "证书", "复检", "天然A货"]),
+        ("occasion", "self_wear", "自用", 16, ["自用", "自己戴", "自己佩戴", "日常自己戴"], ["自用", "日常佩戴", "通勤佩戴", "无纹裂"]),
+        ("occasion", "partner_gift", "伴侣礼物", 24, ["送女朋友", "送老婆", "送太太", "纪念日", "生日礼物"], ["送礼", "节日礼赠", "冰种", "飘绿", "晴底", "水滴", "葫芦"]),
+        ("occasion", "business_gift", "商务礼赠", 28, ["商务礼", "客户礼", "送客户", "体面", "拿得出手", "正式场合"], ["商务礼赠", "证书", "复检", "天然A货", "高冰", "玻璃种"]),
+        ("occasion", "wedding_gift", "婚庆礼赠", 22, ["结婚", "婚礼", "订婚", "嫁妆", "婚庆"], ["婚庆礼赠", "春彩", "满绿", "正阳绿", "无纹裂"]),
+        ("occasion", "daily_wear", "日常佩戴", 24, ["日常戴", "每天戴", "上班戴", "通勤", "百搭", "不挑衣服"], ["日常佩戴", "通勤佩戴", "自用", "正圈", "晴底", "白冰", "无纹裂"]),
+        ("occasion", "collection", "收藏", 34, ["收藏", "传家", "保值", "升值", "藏品", "收藏级"], ["收藏", "玻璃种", "高冰", "帝王绿", "正阳绿", "满绿", "无纹裂"]),
+        ("style", "understated", "低调耐看", 24, ["别太老气", "不要老气", "不老气", "别太张扬", "不要张扬", "低调", "素一点", "耐看"], ["晴底", "白冰", "蓝水", "素牌", "正圈", "日常佩戴"]),
+        ("style", "young", "年轻清爽", 22, ["年轻", "显年轻", "清爽", "少女", "小清新"], ["晴底", "晴水", "白冰", "冰种", "水滴", "叶子", "葫芦"]),
+        ("style", "elegant", "显气质", 24, ["气质", "优雅", "温润", "高级感", "显白"], ["冰种", "高冰", "晴底", "白冰", "飘花", "正圈"]),
+        ("style", "bold", "存在感强", 18, ["大气", "显眼", "有存在感", "压得住场", "醒目"], ["满绿", "阳绿", "正阳绿", "帝王绿", "圆条", "商务礼赠"]),
+        ("appearance", "clean_visual", "看起来干净", 30, ["干净一点", "看起来干净", "少棉", "少瑕疵", "不要脏", "底子干净", "清透"], ["无纹裂", "肉眼干净", "白冰", "晴底", "冰种", "高冰"]),
+        ("appearance", "icy_translucent", "通透水润", 30, ["通透", "冰透", "水润", "水头好", "起光", "起胶", "透一点"], ["冰种", "高冰", "玻璃种", "起光", "起胶", "水润"]),
+        ("appearance", "vivid_green", "绿色明显", 26, ["绿一点", "颜色明显", "色好", "色阳", "绿色多", "飘绿多"], ["飘绿", "阳绿", "正阳绿", "满绿", "帝王绿", "辣绿"]),
+        ("appearance", "premium_look", "显贵", 32, ["显贵", "看着贵", "有档次", "高级", "贵气"], ["高冰", "玻璃种", "帝王绿", "正阳绿", "满绿", "起光", "收藏"]),
+        ("appearance", "photogenic", "上镜", 18, ["拍照好看", "上镜", "直播好看", "视频好看"], ["冰种", "飘绿", "阳绿", "晴底", "水滴", "蛋面"]),
+        ("quality", "low_flaw", "低瑕疵", 30, ["瑕疵少", "不能有裂", "不要裂", "不要纹", "只要无纹裂", "完美一点"], ["无纹裂", "无裂", "无纹", "肉眼干净", "证书"]),
+        ("quality", "certified", "证书复检", 24, ["要证书", "带证书", "可复检", "保真", "天然A货", "a货"], ["证书", "复检", "天然A货"]),
+        ("quality", "old_material", "种老", 18, ["种老", "老坑", "结构紧", "细腻"], ["高冰", "玻璃种", "冰种", "细腻", "起光"]),
+    ]
+    for concept in concepts:
+        db.execute(
+            """
+            INSERT INTO query_concepts (type, value, label, weight, synonyms_json, product_terms_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(type, value) DO UPDATE SET
+              label = excluded.label,
+              weight = excluded.weight,
+              synonyms_json = excluded.synonyms_json,
+              product_terms_json = excluded.product_terms_json
+            """,
+            (concept[0], concept[1], concept[2], concept[3], encode(concept[4]), encode(concept[5])),
+        )
+    db.commit()
+
+
+def list_query_concepts():
+    rows = db.execute("SELECT * FROM query_concepts ORDER BY weight DESC, id ASC").fetchall()
+    return [{
+        "id": row["id"],
+        "type": row["type"],
+        "value": row["value"],
+        "label": row["label"],
+        "weight": row["weight"],
+        "synonyms": decode(row["synonyms_json"], []),
+        "productTerms": decode(row["product_terms_json"], []),
+    } for row in rows]
+
+
+def record_query_understanding_event(event):
+    db.execute(
+        """
+        INSERT INTO query_understanding_events (session_id, raw_text, mode, confidence, signals_json, parsed_need_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event.get("sessionId"),
+            event["rawText"],
+            event["mode"],
+            float(event.get("confidence") or 0),
+            encode(event.get("signals") or []),
+            encode(event.get("parsedNeed") or {}),
+        ),
+    )
+    db.commit()
+
+
 def sync_product_documents():
     for product in list_products({}):
         upsert_product_document(product)
@@ -755,6 +878,7 @@ def seed_catalog_products(seller_id, count=299):
 
 def seed_database():
     execute_schema()
+    seed_query_concepts()
     seller = get_seller("seller@email.com")
     if seller:
         seller_id = seller["id"]

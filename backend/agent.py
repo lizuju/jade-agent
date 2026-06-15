@@ -13,9 +13,11 @@ from .db import (
     get_session_state,
     list_products,
     record_agent_run,
+    record_query_understanding_event,
     search_product_documents,
     update_session_state,
 )
+from .query_understanding import understand_query_concepts
 
 
 SEMANTIC_CATALOG = {
@@ -33,6 +35,7 @@ COLOR_FAMILIES = {
     "飘绿": ["飘绿", "阳绿", "绿色"],
     "晴底": ["晴底", "晴底色"],
     "白冰": ["白冰", "冰白"],
+    "蓝水": ["蓝水", "晴水", "蓝色", "偏蓝", "蓝调"],
 }
 
 FLAW_FAMILIES = {
@@ -101,6 +104,14 @@ def extract_budget(text):
     return price_or(f"{budget_match.group(1)}{budget_match.group(2) or ''}")
 
 
+def is_soft_budget(text):
+    if not extract_budget(text):
+        return False
+    if re.search(r"左右|大概|大约|约|上下|附近|差不多|可小超", text):
+        return True
+    return not bool(re.search(r"预算|以内|不超过|控制在|上限", text))
+
+
 def make_query_terms(values):
     terms = []
     for value in values:
@@ -113,6 +124,8 @@ def price_preference(text):
         return "premium"
     if re.search(r"最便宜|最低价|价格最低|越便宜越好", text):
         return "lowest"
+    if re.search(r"中等价格|中等价位|中等预算|价格适中|价位适中|中端|中档|普通价位|不要太贵也不要太便宜", text):
+        return "mid"
     if re.search(r"便宜|实惠|性价比|划算|入门|低预算", text):
         return "value"
     return ""
@@ -122,41 +135,47 @@ def accepts_any_category(text):
     return bool(re.search(r"品类.*都可以|品种.*都可以|类型.*都可以|款式.*都可以|什么.*都可以|不限品类|不限品种|都行|随便", text))
 
 
-def extract_preference_profile(text):
-    profile = {
-        "price": price_preference(text),
-        "appearance": bool(re.search(r"漂亮|好看|颜值|成色|品相|显气质|高级感", text)),
-        "quality": bool(re.search(r"品质|品相|成色|收藏|顶级|高货|最好的|品质最好|种老|起光|起胶", text)),
-        "water": bool(re.search(r"水头|种水|通透|冰透|水润|起光|起胶", text)),
-        "color": bool(re.search(r"颜色|色正|色阳|色辣|满色|满绿|阳绿|帝王绿|飘花|飘绿|春彩|紫罗兰|晴底", text)),
-        "clarity": bool(re.search(r"无瑕|干净|无纹裂|无裂|无纹|少棉|少瑕|瑕疵少", text)),
-        "gift": bool(re.search(r"送礼|礼物|体面|拿得出手|长辈|妈妈|女朋友|老婆", text)),
-        "certificate": bool(re.search(r"证书|复检|保真|天然A货|A货", text)),
-        "openCategory": accepts_any_category(text),
-    }
-    labels = []
+def extract_preference_profile(text, understanding=None):
+    concept = understanding or understand_query_concepts(text)
+    profile = concept["profile"]
+    profile["price"] = profile.get("price") or price_preference(text)
+    profile["appearance"] = bool(profile.get("appearance") or re.search(r"漂亮|好看|颜值|成色|品相|显气质|高级感", text))
+    profile["quality"] = bool(profile.get("quality") or re.search(r"品质|品相|成色|收藏|顶级|高货|最好的|品质最好|种老|起光|起胶", text))
+    profile["water"] = bool(profile.get("water") or re.search(r"水头|种水|通透|冰透|水润|起光|起胶", text))
+    profile["color"] = bool(profile.get("color") or re.search(r"颜色|色正|色阳|色辣|满色|满绿|阳绿|帝王绿|飘花|飘绿|春彩|紫罗兰|晴底", text))
+    profile["clarity"] = bool(profile.get("clarity") or re.search(r"无瑕|干净|无纹裂|无裂|无纹|少棉|少瑕|瑕疵少", text))
+    profile["gift"] = bool(profile.get("gift") or re.search(r"送礼|礼物|体面|拿得出手|长辈|妈妈|女朋友|老婆", text))
+    profile["certificate"] = bool(profile.get("certificate") or re.search(r"证书|复检|保真|天然A货|A货", text))
+    profile["openCategory"] = bool(profile.get("openCategory") or accepts_any_category(text))
+    labels = [*(profile.get("labels") or [])]
     if profile["price"] == "premium":
         labels.append("高货")
     if profile["price"] == "lowest":
         labels.append("低价")
+    if profile["price"] == "mid":
+        labels.append("中等价位")
     if profile["price"] == "value":
         labels.append("性价比")
     for key, label in [("appearance", "颜值"), ("quality", "品质"), ("water", "水头"), ("color", "颜色"), ("clarity", "干净"), ("gift", "送礼"), ("certificate", "证书")]:
         if profile[key]:
             labels.append(label)
-    profile["labels"] = labels
-    profile["queryTerms"] = labels[:]
+    profile["labels"] = compact(labels)
+    profile["queryTerms"] = compact([*(profile.get("queryTerms") or []), *profile["labels"]])
+    profile["conceptConfidence"] = concept["confidence"]
     return profile
 
 
 def has_actionable_preference(profile):
-    return bool(profile and (profile.get("price") or profile.get("appearance") or profile.get("quality") or profile.get("water") or profile.get("color") or profile.get("clarity") or profile.get("gift") or profile.get("certificate")))
+    return bool(profile and (profile.get("price") or profile.get("appearance") or profile.get("quality") or profile.get("water") or profile.get("color") or profile.get("clarity") or profile.get("gift") or profile.get("certificate") or profile.get("signals")))
 
 
-def heuristic_need(raw_need):
+def heuristic_need(raw_need, understanding=None):
     text = str(raw_need or "")
-    category = ""
-    if "手镯" in text or "镯" in text:
+    concept_profile = (understanding or understand_query_concepts(text))["profile"]
+    category = concept_profile.get("category") or ""
+    if category:
+        pass
+    elif "手镯" in text or "镯" in text:
         category = "手镯"
     elif "无事牌" in text or "牌子" in text or "龙牌" in text:
         category = "无事牌"
@@ -175,9 +194,9 @@ def heuristic_need(raw_need):
     elif "戒" in text:
         category = "戒面"
 
-    water = extract_first(text, SEMANTIC_CATALOG["waters"])
-    color = extract_first(text, SEMANTIC_CATALOG["colors"])
-    shape = extract_first(text, SEMANTIC_CATALOG["shapes"])
+    water = concept_profile.get("waterValue") or extract_first(text, SEMANTIC_CATALOG["waters"])
+    color = concept_profile.get("colorValue") or extract_first(text, SEMANTIC_CATALOG["colors"])
+    shape = concept_profile.get("shapeValue") or extract_first(text, SEMANTIC_CATALOG["shapes"])
     sizes = extract_sizes(text)
     flaw = extract_first(text, SEMANTIC_CATALOG["flawTerms"])
     scenes = [term for term in SEMANTIC_CATALOG["scenes"] if term in text]
@@ -193,10 +212,11 @@ def heuristic_need(raw_need):
         "证书" if ("证书" in text or "复检" in text) else "",
         *sizes,
     ])
-    confidence = min(0.95, 0.45 + len(tags) * 0.06 + (0.08 if sizes else 0) + (0.08 if re.search(r"\d", text) else 0))
+    confidence = min(0.95, 0.45 + len(tags) * 0.06 + (0.1 if category else 0) + (0.08 if sizes else 0) + (0.08 if re.search(r"\d", text) else 0))
     return {
         "category": category,
         "budget": extract_budget(text),
+        "budgetSoft": is_soft_budget(text),
         "tags": tags,
         "occasion": "/".join(scenes),
         "mustHave": must_have,
@@ -221,18 +241,28 @@ def has_product_constraint(need):
 
 
 def is_refinement_text(text):
-    return bool(re.search(r"再来|换一批|换个|只要|不要|必须|优先|更|最|贵|便宜|证书|无纹|无裂|微瑕|送礼|自用", text))
+    return bool(re.search(r"再来|换一批|换个|只要|不要|必须|优先|更|最|贵|便宜|证书|无纹|无裂|微瑕", text))
 
 
-def classify_buyer_intent(raw_need, parsed_need, previous_need):
+def is_independent_match(text, need):
+    if need.get("category"):
+        return True
+    if re.search(r"我要|想要|想找|找|买|推荐|有没有|看货|来个", text) and has_need_slot(need):
+        return True
+    return bool(need.get("budget") and (need.get("water") or need.get("color") or need.get("shape")))
+
+
+def classify_buyer_intent(raw_need, parsed_need, previous_need, understanding=None):
     text = str(raw_need or "").strip()
     has_find_signal = has_need_slot(parsed_need)
     has_previous_find_signal = has_need_slot(previous_need or {})
-    profile = extract_preference_profile(text)
+    profile = extract_preference_profile(text, understanding)
     has_preference = has_actionable_preference(profile)
     refinement = is_refinement_text(text)
     asks_knowledge_only = bool(re.search(r"什么|怎么|如何|区别|真假|鉴定|保养|证书|a货|值吗|好吗|可以吗|[?？]", text, re.I)) and not bool(re.search(r"找|买|推荐|预算|价位|价格|有没有|货源|看货|送礼|自用|需要|想要", text))
-    if has_previous_find_signal and not has_find_signal and (has_preference or refinement):
+    if has_find_signal and (not has_previous_find_signal or is_independent_match(text, parsed_need)):
+        return {"mode": "match", "pricePreference": profile["price"], "preferenceProfile": profile, "reason": "识别到独立找货需求"}
+    if has_previous_find_signal and (refinement or (has_preference and not has_find_signal)):
         return {"mode": "refine", "pricePreference": profile["price"], "preferenceProfile": profile, "reason": "基于上一轮需求补充偏好"}
     if has_find_signal:
         return {"mode": "match", "pricePreference": profile["price"], "preferenceProfile": profile, "reason": "识别到找货槽位"}
@@ -252,14 +282,15 @@ def merge_parsed_need(previous, current, intent):
         merged = {**current, "pricePreference": intent.get("pricePreference"), "preferenceProfile": intent.get("preferenceProfile")}
         merged["queryTerms"] = make_query_terms([*(merged.get("queryTerms") or []), *((intent.get("preferenceProfile") or {}).get("queryTerms") or [])])
         return merged
-    profile = {**(previous.get("preferenceProfile") or {}), **(current.get("preferenceProfile") or {}), **(intent.get("preferenceProfile") or {})}
-    profile["labels"] = make_query_terms([*(previous.get("preferenceProfile", {}).get("labels") or []), *(current.get("preferenceProfile", {}).get("labels") or []), *(intent.get("preferenceProfile", {}).get("labels") or [])])
-    profile["queryTerms"] = make_query_terms([*(previous.get("preferenceProfile", {}).get("queryTerms") or []), *(current.get("preferenceProfile", {}).get("queryTerms") or []), *(intent.get("preferenceProfile", {}).get("queryTerms") or [])])
+    profile = intent.get("preferenceProfile") or {}
+    profile["labels"] = make_query_terms(profile.get("labels") or [])
+    profile["queryTerms"] = make_query_terms(profile.get("queryTerms") or [])
     merged = {
         **previous,
         **current,
         "category": current.get("category") or previous.get("category") or "",
         "budget": current.get("budget") if current.get("budget") is not None else previous.get("budget"),
+        "budgetSoft": current.get("budgetSoft") if current.get("budget") is not None else previous.get("budgetSoft"),
         "occasion": current.get("occasion") or previous.get("occasion") or "",
         "water": current.get("water") or previous.get("water") or "",
         "color": current.get("color") or previous.get("color") or "",
@@ -270,8 +301,53 @@ def merge_parsed_need(previous, current, intent):
         "preferenceProfile": profile,
         "pricePreference": intent.get("pricePreference") or current.get("pricePreference") or previous.get("pricePreference") or "",
     }
-    merged["queryTerms"] = make_query_terms([*(previous.get("queryTerms") or []), *(current.get("queryTerms") or []), *(profile.get("queryTerms") or [])])
+    merged["queryTerms"] = make_query_terms([
+        merged.get("category"),
+        merged.get("water"),
+        merged.get("color"),
+        merged.get("shape"),
+        merged.get("occasion"),
+        *(merged.get("sizes") or []),
+        *(merged.get("tags") or []),
+        *(merged.get("mustHave") or []),
+        *(profile.get("queryTerms") or []),
+    ])
     return merged
+
+
+def latest_signal_terms(need, profile):
+    return make_query_terms([
+        need.get("category"),
+        need.get("water"),
+        need.get("color"),
+        need.get("shape"),
+        *(need.get("sizes") or []),
+        *(need.get("tags") or []),
+        *(need.get("mustHave") or []),
+        *(profile.get("queryTerms") or []),
+        *[term for concept in profile.get("signals") or [] for term in concept.get("productTerms", [])],
+    ])
+
+
+def build_latest_signal(raw_need, current_need, intent):
+    profile = intent.get("preferenceProfile") or {}
+    return {
+        "rawText": str(raw_need or "").strip(),
+        "mode": intent.get("mode"),
+        "price": profile.get("price") or intent.get("pricePreference") or "",
+        "profile": profile,
+        "category": current_need.get("category") or "",
+        "water": current_need.get("water") or "",
+        "color": current_need.get("color") or "",
+        "shape": current_need.get("shape") or "",
+        "budget": current_need.get("budget"),
+        "budgetSoft": current_need.get("budgetSoft"),
+        "sizes": current_need.get("sizes") or [],
+        "mustHave": current_need.get("mustHave") or [],
+        "terms": latest_signal_terms(current_need, profile),
+        "labels": make_query_terms([*(profile.get("labels") or []), *(current_need.get("mustHave") or [])]),
+        "concepts": profile.get("signals") or [],
+    }
 
 
 def validate_need_rules(need):
@@ -292,6 +368,12 @@ def validate_need_rules(need):
     if need.get("certificateRequired"):
         passed.append("证书/复检作为硬性条件")
     return {"ok": bool(not warnings or passed), "passed": passed, "warnings": warnings, "hardRules": make_query_terms([need.get("category"), *(need.get("mustHave") or []), "证书" if need.get("certificateRequired") else ""])}
+
+
+def budget_limit(need):
+    if not need.get("budget"):
+        return None
+    return need["budget"] * (1.12 if need.get("budgetSoft") else 1)
 
 
 def expand_need_terms(need):
@@ -323,29 +405,31 @@ def evaluate_product_rules(product, need):
         score += 4
     else:
         ratio = product["price"] / need["budget"]
-        if product["price"] <= need["budget"] and ratio >= 0.78:
-            score += 26
-            passed.append("价格贴近预算")
+        distance = abs(product["price"] - need["budget"]) / need["budget"]
+        if product["price"] <= need["budget"] and ratio >= 0.72:
+            score += max(16, round(44 - distance * 80))
+            passed.append("价格贴近预算" if distance <= 0.18 else "价格在预算内")
         elif product["price"] <= need["budget"] and ratio >= 0.5:
-            score += 14
+            score += max(8, round(22 - distance * 24))
             passed.append("价格在预算内但偏低")
         elif product["price"] <= need["budget"]:
             score += 4
             failed.append("价格明显低于预算段")
-        elif product["price"] <= need["budget"] * 1.12:
-            score += 10
+        elif need.get("budgetSoft") and product["price"] <= budget_limit(need):
+            score += max(10, round(30 - distance * 100))
             passed.append("价格略超预算")
         else:
             failed.append("价格超过预算")
     if need.get("color"):
         family = COLOR_FAMILIES.get(need["color"], [need["color"]])
         if need["color"] in evidence:
-            score += 18
+            score += 32
             passed.append(f"精确命中{need['color']}")
         elif any(term in evidence for term in family):
-            score += 9
+            score += 18
             passed.append(f"{need['color']}相近色系")
         else:
+            score -= 22
             failed.append(f"未命中{need['color']}色系")
     if not need.get("certificateRequired") or has_certificate:
         score += 8 if need.get("certificateRequired") else 3
@@ -415,51 +499,145 @@ def score_product(product, need, retrieval_hit):
     return scored
 
 
-def product_preference_score(product, need, candidate_prices):
-    profile = need.get("preferenceProfile") or {}
-    if not candidate_prices:
+def product_evidence_text(product):
+    return " ".join(str(item or "") for item in [
+        product["title"], product["category"], product.get("quality"), product.get("water"), product.get("color"),
+        product.get("shape"), product.get("size"), product.get("diameter"), product.get("flaws"), product.get("scene"),
+        product.get("certificate"), product.get("detail"), product.get("ragText"), " ".join(product.get("tags") or []),
+    ])
+
+
+def term_matches_product(product, evidence, term):
+    return bool(term and (term in evidence or any(term in product_tag or product_tag in term for product_tag in product.get("tags") or [])))
+
+
+def product_satisfies_must(product, must):
+    evidence = product_evidence_text(product)
+    if must == "证书":
+        return "证书" in evidence or "复检" in evidence
+    if "mm" in must:
+        return must in evidence or must.replace("mm", "") in evidence
+    return any(term_matches_product(product, evidence, term) for term in FLAW_FAMILIES.get(must, [must]))
+
+
+def latest_signal_score(product, signal):
+    if not signal:
         return {"score": 0, "reasons": []}
-    evidence = " ".join(str(item or "") for item in [product["title"], product["category"], product.get("quality"), product.get("water"), product.get("color"), product.get("shape"), product.get("flaws"), product.get("scene"), product.get("certificate"), product.get("detail"), product.get("ragText"), " ".join(product.get("tags") or [])])
-    max_price = max(candidate_prices)
-    min_price = min(candidate_prices)
-    value_range = max(max_price - min_price, 1)
+    evidence = product_evidence_text(product)
     score = 0
     reasons = []
-    if profile.get("price") == "premium":
-        score += round(((product["price"] - min_price) / value_range) * 45)
-        reasons.append("高货优先")
-    if profile.get("price") == "lowest":
-        score += round(((max_price - product["price"]) / value_range) * 45)
-        reasons.append("低价优先")
-    if profile.get("price") == "value":
+    for key, label, points in [("category", "品类", 24), ("water", "种水", 20), ("color", "颜色", 20), ("shape", "器型", 14)]:
+        value = signal.get(key)
+        if value:
+            if key == "color":
+                family = COLOR_FAMILIES.get(value, [value])
+                if term_matches_product(product, evidence, value):
+                    score += 38
+                    reasons.append("本轮颜色精确匹配")
+                elif any(term_matches_product(product, evidence, term) for term in family):
+                    score += 24
+                    reasons.append("本轮颜色相近匹配")
+                else:
+                    score -= 45
+                    reasons.append("本轮颜色不匹配")
+            elif term_matches_product(product, evidence, value):
+                score += points
+                reasons.append(f"本轮{label}匹配")
+    if signal.get("budget"):
+        budget = signal["budget"]
+        distance = abs(product["price"] - budget) / budget
+        limit = budget * (1.12 if signal.get("budgetSoft") else 1)
+        if product["price"] <= limit:
+            score += max(12, round(90 - distance * 180))
+            if distance <= 0.22:
+                reasons.append("本轮预算贴近")
+            elif product["price"] <= budget:
+                reasons.append("本轮预算内但偏低")
+            else:
+                reasons.append("本轮预算略超")
+        else:
+            score -= min(45, round(distance * 70))
+            reasons.append("本轮预算偏离")
+    for size in signal.get("sizes") or []:
+        if term_matches_product(product, evidence, size) or ("mm" in size and size.replace("mm", "") in evidence):
+            score += 16
+            reasons.append("本轮尺寸匹配")
+    for must in signal.get("mustHave") or []:
+        if (must == "证书" and ("证书" in evidence or "复检" in evidence)) or term_matches_product(product, evidence, must):
+            score += 28
+            reasons.append(f"本轮满足{must}")
+        else:
+            score -= 24
+            reasons.append(f"本轮未满足{must}")
+    matched_terms = []
+    for term in signal.get("terms") or []:
+        if term_matches_product(product, evidence, term):
+            matched_terms.append(term)
+    if matched_terms:
+        score += min(42, len(compact(matched_terms)) * 10)
+        reasons.append(f"本轮信号命中{'、'.join(compact(matched_terms)[:3])}")
+    for concept in signal.get("concepts") or []:
+        product_terms = compact(concept.get("productTerms") or [])
+        concept_matches = [term for term in product_terms if term_matches_product(product, evidence, term)]
+        if concept_matches:
+            score += min(concept.get("weight", 10), 8 + len(concept_matches) * 6)
+            reasons.append(f"本轮{concept.get('label')}匹配")
+    return {"score": score, "reasons": compact(reasons)[:5]}
+
+
+def product_preference_score(product, need, candidate_prices, latest_signal=None):
+    profile = (latest_signal or {}).get("profile") or need.get("preferenceProfile") or {}
+    price_prefer = (latest_signal or {}).get("price") or profile.get("price")
+    if not candidate_prices:
+        return {"score": 0, "reasons": []}
+    evidence = product_evidence_text(product)
+    max_price = max(candidate_prices)
+    min_price = min(candidate_prices)
+    sorted_prices = sorted(candidate_prices)
+    median_price = sorted_prices[len(sorted_prices) // 2]
+    value_range = max(max_price - min_price, 1)
+    latest = latest_signal_score(product, latest_signal)
+    score = latest["score"]
+    reasons = [*latest["reasons"]]
+    if price_prefer == "premium":
+        score += round(((product["price"] - min_price) / value_range) * 180)
+        reasons.append("本轮价格上限优先")
+    if price_prefer == "lowest":
+        score += round(((max_price - product["price"]) / value_range) * 180)
+        reasons.append("本轮低价优先")
+    if price_prefer == "mid":
+        distance = abs(product["price"] - median_price)
+        score += max(0, round((1 - min(distance / value_range, 1)) * 180))
+        reasons.append("本轮中等价位优先")
+    if price_prefer == "value":
         score += round(((max_price - product["price"]) / value_range) * 25)
-        reasons.append("性价比优先")
+        reasons.append("本轮性价比优先")
     water_rank = 28 if "玻璃种" in evidence else 24 if "高冰" in evidence else 20 if any(term in evidence for term in ["冰种", "冰透", "起光", "起胶"]) else 14 if any(term in evidence for term in ["糯冰", "冰糯", "水润"]) else 0
     color_rank = 30 if any(term in evidence for term in ["帝王绿", "正阳绿", "满绿"]) else 24 if any(term in evidence for term in ["阳绿", "辣绿"]) else 18 if any(term in evidence for term in ["飘绿", "飘花"]) else 10
     clean_rank = 18 if any(term in evidence for term in ["无纹裂", "无裂", "无纹", "肉眼干净"]) else 8 if "微瑕" in evidence else 0
     if profile.get("quality"):
         score += water_rank + round(color_rank * 0.5) + clean_rank
-        reasons.append("品质优先")
+        reasons.append("本轮品质优先")
     if profile.get("appearance"):
         score += color_rank + round(water_rank * 0.7)
-        reasons.append("颜值优先")
+        reasons.append("本轮颜值优先")
     if profile.get("water"):
         score += water_rank
-        reasons.append("水头优先")
+        reasons.append("本轮水头优先")
     if profile.get("color"):
         score += color_rank
-        reasons.append("颜色优先")
+        reasons.append("本轮颜色优先")
     if profile.get("clarity"):
         score += clean_rank
-        reasons.append("干净度优先")
+        reasons.append("本轮干净度优先")
     if profile.get("gift"):
         score += 16 if any(term in evidence for term in ["送礼", "礼赠", "证书", "复检", "天然A货"]) else 0
-        reasons.append("送礼优先")
+        reasons.append("本轮送礼优先")
     return {"score": max(0, score), "reasons": compact(reasons)}
 
 
-def apply_preference(product, need, candidate_prices):
-    preference = product_preference_score(product, need, candidate_prices)
+def apply_preference(product, need, candidate_prices, latest_signal=None):
+    preference = product_preference_score(product, need, candidate_prices, latest_signal)
     if not preference["score"]:
         return product
     updated = dict(product)
@@ -469,6 +647,10 @@ def apply_preference(product, need, candidate_prices):
     updated["agentScore"]["total"] += preference["score"]
     updated["agentScore"]["preference"] = preference["score"]
     return updated
+
+
+def has_latest_sort_signal(signal):
+    return bool(signal and (signal.get("price") or signal.get("terms") or signal.get("mustHave") or signal.get("labels") or signal.get("concepts")))
 
 
 def buyer_need_summary(need):
@@ -511,8 +693,14 @@ def maybe_ollama(prompt):
         return {"text": None, "provider": "ollama", "error": str(error)[:180], "durationMs": round((time.time() - started) * 1000)}
 
 
-def write_buyer_reply(need, matches, retrieval_docs):
-    return f"已为您解析需求：{buyer_need_summary(need)}。我从商品文档召回 {len(retrieval_docs)} 条货源证据，并按规则、语义和预算综合排序。"
+def write_buyer_reply(need, matches, retrieval_docs, latest_signal):
+    latest_text = (latest_signal or {}).get("rawText")
+    prefix = f"已按您最新补充的「{latest_text}」重排" if latest_signal and latest_signal.get("mode") == "refine" and latest_text else "已根据您的需求完成匹配"
+    if not matches:
+        return f"{prefix}。当前需求为：{buyer_need_summary(need)}。我召回了 {len(retrieval_docs)} 条商品证据，但还需要更多品类、预算或尺寸信息才能给出稳定推荐。"
+    top = matches[0]
+    reasons = "、".join((top.get("matchReasons") or [])[:3]) or "综合匹配靠前"
+    return f"{prefix}。当前需求为：{buyer_need_summary(need)}。我召回了 {len(retrieval_docs)} 条商品证据，优先推荐「{top['title']}」（￥{top['price']:,}），依据是：{reasons}。"
 
 
 def run_buyer_match_agent(payload):
@@ -525,17 +713,32 @@ def run_buyer_match_agent(payload):
         session_state = get_session_state(session)
         add_message(session_id, "user", need_text)
 
-        current_need = heuristic_need(need_text)
+        understanding = understand_query_concepts(need_text)
+        current_need = heuristic_need(need_text, understanding)
         previous_need = session_state.get("lastParsedNeed")
-        intent = classify_buyer_intent(need_text, current_need, previous_need)
+        intent = classify_buyer_intent(need_text, current_need, previous_need, understanding)
         parsed_need = merge_parsed_need(previous_need, current_need, intent)
+        latest_signal = build_latest_signal(need_text, current_need, intent)
         validation = validate_need_rules(parsed_need)
+        concept_summary = "、".join(
+            f"{concept['label']}({'/'.join((concept.get('matched') or [])[:2])})"
+            for concept in latest_signal.get("concepts", [])[:5]
+        ) or "未命中概念词库"
+        record_query_understanding_event({
+            "sessionId": session_id,
+            "rawText": need_text,
+            "mode": intent["mode"],
+            "confidence": max(current_need.get("confidence") or 0, (parsed_need.get("preferenceProfile") or {}).get("conceptConfidence") or 0),
+            "signals": latest_signal.get("concepts", []),
+            "parsedNeed": parsed_need,
+        })
 
         if intent["mode"] not in {"match", "refine"}:
             reply = local_service_reply(need_text, parsed_need, intent)
             trace = [
                 {"label": "请求边界校验", "detail": f"消息 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
                 {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
+                {"label": "概念理解 Agent", "detail": concept_summary},
                 {"label": "语义识别 Agent", "detail": f"{'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
                 {"label": "Python Agent状态", "detail": "Python 后端已完成意图识别，本地规则生成客服回复"},
             ]
@@ -551,42 +754,92 @@ def run_buyer_match_agent(payload):
             else:
                 candidate_ids = {product["id"] for product in inventory}
             if parsed_need.get("budget"):
+                price_limit = budget_limit(parsed_need)
                 budget_candidates = sorted(
-                    [product for product in inventory if (not parsed_need.get("category") or product["category"] == parsed_need["category"]) and product["price"] <= parsed_need["budget"] * 1.12],
+                    [product for product in inventory if (not parsed_need.get("category") or product["category"] == parsed_need["category"]) and product["price"] <= price_limit],
                     key=lambda product: abs(product["price"] - parsed_need["budget"]),
                 )[:8]
                 candidate_ids.update(product["id"] for product in budget_candidates)
+            if parsed_need.get("color"):
+                color_family = COLOR_FAMILIES.get(parsed_need["color"], [parsed_need["color"]])
+                color_candidates = sorted(
+                    [
+                        product for product in inventory
+                        if (not parsed_need.get("category") or product["category"] == parsed_need["category"])
+                        and (not parsed_need.get("budget") or product["price"] <= budget_limit(parsed_need))
+                        and any(term_matches_product(product, product_evidence_text(product), term) for term in color_family)
+                    ],
+                    key=lambda product: abs(product["price"] - parsed_need["budget"]) if parsed_need.get("budget") else -product["price"],
+                )[:14]
+                candidate_ids.update(product["id"] for product in color_candidates)
+            price_prefer = latest_signal.get("price") or (parsed_need.get("preferenceProfile") or {}).get("price") or parsed_need.get("pricePreference")
+            if price_prefer in {"premium", "lowest", "mid"}:
+                price_pool = [
+                    product for product in inventory
+                    if (not parsed_need.get("category") or product["category"] == parsed_need["category"])
+                    and (not parsed_need.get("budget") or product["price"] <= budget_limit(parsed_need))
+                ]
+                if price_prefer == "mid":
+                    pool_prices = sorted(product["price"] for product in price_pool)
+                    median_price = pool_prices[len(pool_prices) // 2] if pool_prices else 0
+                    price_candidates = sorted(price_pool, key=lambda product: abs(product["price"] - median_price))[:14]
+                else:
+                    price_candidates = sorted(price_pool, key=lambda product: product["price"], reverse=price_prefer == "premium")[:10]
+                candidate_ids.update(product["id"] for product in price_candidates)
             high_budget_floor = parsed_need["budget"] * 0.45 if parsed_need.get("budget") and parsed_need["budget"] >= 80000 else 0
+            color_matched_ids = set()
+            if parsed_need.get("color"):
+                color_family = COLOR_FAMILIES.get(parsed_need["color"], [parsed_need["color"]])
+                color_matched_ids = {
+                    product["id"] for product in inventory
+                    if (not parsed_need.get("category") or product["category"] == parsed_need["category"])
+                    and (not parsed_need.get("budget") or product["price"] <= budget_limit(parsed_need))
+                    and any(term_matches_product(product, product_evidence_text(product), term) for term in color_family)
+                }
             candidates = []
             for product in inventory:
                 if product["id"] not in candidate_ids:
                     continue
-                if parsed_need.get("budget") and product["price"] > parsed_need["budget"] * 1.12:
+                if parsed_need.get("category") and product["category"] != parsed_need["category"]:
+                    continue
+                if parsed_need.get("budget") and product["price"] > budget_limit(parsed_need):
+                    continue
+                if color_matched_ids and product["id"] not in color_matched_ids:
                     continue
                 if high_budget_floor and product["price"] < high_budget_floor:
                     evidence = f"{product['title']} {product.get('color')} {' '.join(product['tags'])} {product.get('ragText')}"
                     if not parsed_need.get("color") or parsed_need["color"] not in evidence:
                         continue
                 candidates.append(product)
+            if parsed_need.get("mustHave"):
+                must_matched = [product for product in candidates if all(product_satisfies_must(product, must) for must in parsed_need["mustHave"])]
+                if must_matched:
+                    candidates = must_matched
             candidate_prices = [product["price"] for product in candidates]
-            products = sorted(
-                [apply_preference(score_product(product, parsed_need, retrieval_by_product.get(product["id"])), parsed_need, candidate_prices) for product in candidates],
-                key=lambda product: product["matchScore"],
-                reverse=True,
-            )[:3]
+            scored_products = [apply_preference(score_product(product, parsed_need, retrieval_by_product.get(product["id"])), parsed_need, candidate_prices, latest_signal) for product in candidates]
+            if (latest_signal.get("price") or "") == "premium":
+                products = sorted(scored_products, key=lambda product: (product["price"], product["matchScore"]), reverse=True)[:3]
+            elif (latest_signal.get("price") or "") == "lowest":
+                products = sorted(scored_products, key=lambda product: (product["price"], -product["matchScore"]))[:3]
+            elif has_latest_sort_signal(latest_signal):
+                products = sorted(scored_products, key=lambda product: (product["agentScore"].get("preference", 0), product["matchScore"]), reverse=True)[:3]
+            else:
+                products = sorted(scored_products, key=lambda product: product["matchScore"], reverse=True)[:3]
             if buyer_email:
                 for product in products:
                     if product["status"] == "listed":
                         create_lead({"productId": product["id"], "buyerEmail": buyer_email, "buyerNeed": need_text, "source": "buyer_agent"})
-            reply = write_buyer_reply(parsed_need, products, retrieval_docs)
+            reply = write_buyer_reply(parsed_need, products, retrieval_docs, latest_signal)
             trace = [
                 {"label": "请求边界校验", "detail": f"需求 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
                 {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
+                {"label": "概念理解 Agent", "detail": concept_summary},
+                {"label": "本轮信号 Agent", "detail": "、".join(compact([latest_signal.get("price"), latest_signal.get("category"), f"￥{latest_signal['budget']:,}" if latest_signal.get("budget") else "", latest_signal.get("water"), latest_signal.get("color"), *(latest_signal.get("mustHave") or []), *(latest_signal.get("labels") or [])])) or latest_signal.get("rawText") or "无"},
                 {"label": "语义识别 Agent", "detail": f"{parsed_need.get('category') or '未限定品类'} / {('￥' + format(parsed_need['budget'], ',')) if parsed_need.get('budget') else '未限定预算'} / {'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
                 {"label": "Python Agent状态", "detail": "Python 后端完成意图识别、RAG召回、规则排序和解释生成"},
                 {"label": "规则校验 Agent", "detail": f"{'；'.join(validation['passed']) or '基础规则通过'}{('；提醒：' + '；'.join(validation['warnings'])) if validation['warnings'] else ''}"},
                 {"label": "RAG检索 Tool", "detail": f"查询 product_documents，召回 {len(retrieval_docs)} 条证据；命中词：{'、'.join((retrieval_docs[0]['matchedTerms'] if retrieval_docs else [])[:5]) or '无'}；候选池 {len(candidates)} 件"},
-                {"label": "排序 Agent", "detail": f"{products[0]['title']}：总分 {products[0]['agentScore']['total']} = 语义 {products[0]['agentScore']['semantic']} + 规则 {products[0]['agentScore']['rules']} + RAG {products[0]['agentScore']['rag']}" if products else "暂无候选"},
+                {"label": "排序 Agent", "detail": f"{products[0]['title']}：总分 {products[0]['agentScore']['total']} = 语义 {products[0]['agentScore']['semantic']} + 规则 {products[0]['agentScore']['rules']} + RAG {products[0]['agentScore']['rag']} + 本轮 {products[0]['agentScore'].get('preference', 0)}" if products else "暂无候选"},
                 {"label": "解释 Agent", "detail": "、".join(products[0]["matchReasons"]) if products else "需要更多需求信息"},
                 {"label": "客资分发 Tool", "detail": "已写入商家客资列表" if buyer_email else "未留邮箱，仅展示匹配结果"},
             ]
@@ -597,7 +850,7 @@ def run_buyer_match_agent(payload):
                 "matchedTerms": doc["matchedTerms"],
                 "snippet": doc["snippet"],
             } for doc in retrieval_docs[:6]]}
-            result = {"runId": run_id, "sessionId": session_id, "mode": "match", "intent": intent, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": retrieval, "products": products, "trace": trace}
+            result = {"runId": run_id, "sessionId": session_id, "mode": "match", "intent": intent, "latestSignal": latest_signal, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": retrieval, "products": products, "trace": trace}
 
         add_message(session_id, "assistant", result["reply"], result)
         update_session_state(session_id, {**session_state, "lastMode": result["mode"], "lastIntent": intent, "lastNeed": need_text, "lastParsedNeed": parsed_need if result["mode"] == "match" else session_state.get("lastParsedNeed"), "lastProductIds": [p["id"] for p in result["products"]]})

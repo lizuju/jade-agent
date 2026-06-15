@@ -28,6 +28,14 @@ import { api, maskEmail, money } from "./api.js";
 
 const sellerEmail = "seller@email.com";
 const buyerEmail = "buyer1@email.com";
+const initialBuyerMessages = [
+  {
+    id: "welcome",
+    role: "assistant",
+    text: "您好！请说出您的翡翠需求（预算、品类、尺寸、品相），我将为您精准匹配货源。",
+    time: "10:30"
+  }
+];
 
 const buyerRoutes = new Set(["buyer", "detail"]);
 const merchantRoutes = new Set(["dashboard", "publish", "publishResult", "editInfo", "products", "editProduct", "leads", "leadDetail", "account", "profile"]);
@@ -200,40 +208,30 @@ function AgentEvidence({ match }) {
 }
 
 function BuyerHome({ state, setState, go }) {
-  const [need, setNeed] = useState("预算5万左右，冰种晴底翡翠手镯，55圈口，正圈，无纹裂，送礼");
   const [loading, setLoading] = useState(false);
   const [thinkingDotCount, setThinkingDotCount] = useState(1);
   const [clientNotice, setClientNotice] = useState("");
-  const [messages, setMessages] = useState([
-    {
-      id: "welcome",
-      role: "assistant",
-      text: "您好！请说出您的翡翠需求（预算、品类、尺寸、品相），我将为您精准匹配货源。",
-      time: "10:30"
-    },
-    {
-      id: "seed-user",
-      role: "user",
-      text: "预算5万左右，冰种晴底翡翠手镯，55圈口，正圈，无纹裂，送礼",
-      time: "10:32"
-    },
-    {
-      id: "seed-assistant",
-      role: "assistant",
-      text: "已为您解析需求，正在匹配优质翡翠货源.",
-      time: "10:33"
-    }
-  ]);
-  const listedProducts = state.products.filter((product) => product.status === "listed");
-  const products = state.match?.products?.length
-    ? state.match.products
-    : state.buyerInteractionMode
-      ? []
-      : listedProducts.slice(0, 3);
+  const need = state.buyerDraftNeed ?? "";
+  const messages = state.buyerMessages?.length ? state.buyerMessages : initialBuyerMessages;
+  const products = state.match?.products?.length ? state.match.products : [];
   const activeTrace = state.lastTrace?.length ? state.lastTrace : state.match?.trace;
   const [welcomeMessage, ...conversationMessages] = messages;
   const isThinking = loading || messages.some((message) => message.thinking);
   const thinkingText = `已为您解析需求，正在匹配优质翡翠货源${".".repeat(thinkingDotCount)}`;
+
+  function setNeed(value) {
+    setState((current) => ({
+      ...current,
+      buyerDraftNeed: typeof value === "function" ? value(current.buyerDraftNeed ?? "") : value
+    }));
+  }
+
+  function setMessages(value) {
+    setState((current) => ({
+      ...current,
+      buyerMessages: typeof value === "function" ? value(current.buyerMessages ?? initialBuyerMessages) : value
+    }));
+  }
 
   useEffect(() => {
     if (!isThinking) {
@@ -1109,12 +1107,50 @@ function LeadDetail({ state, setState, go }) {
   const [contacting, setContacting] = useState(false);
   const [copied, setCopied] = useState(false);
   const [notice, setNotice] = useState("");
-  const lead = state.leads.find((item) => item.id === state.selectedLeadId) ?? state.leads[0];
+  const selectedLeadId = state.selectedLeadId;
+  const cachedLead = state.leads.find((item) => item.id === selectedLeadId);
+  const [lead, setLead] = useState(cachedLead ?? null);
+  const [loading, setLoading] = useState(Boolean(selectedLeadId));
+
+  useEffect(() => {
+    if (!selectedLeadId) {
+      setLead(null);
+      setLoading(false);
+      return;
+    }
+    let ignored = false;
+    setLead(cachedLead ?? null);
+    setLoading(true);
+    setNotice("");
+    api(`/api/leads/${selectedLeadId}`)
+      .then((result) => {
+        if (ignored) return;
+        setLead(result.lead);
+        setState((current) => ({
+          ...current,
+          selectedLeadId,
+          leads: current.leads.some((item) => item.id === result.lead.id)
+            ? current.leads.map((item) => item.id === result.lead.id ? result.lead : item)
+            : [result.lead, ...current.leads]
+        }));
+      })
+      .catch((error) => {
+        if (!ignored) setNotice(`加载失败：${error.message}`);
+      })
+      .finally(() => {
+        if (!ignored) setLoading(false);
+      });
+    return () => {
+      ignored = true;
+    };
+  }, [selectedLeadId]);
+
   if (!lead) {
     return (
-      <div className="screen">
+      <div className="screen lead-detail-screen">
         <Header title="客资详情" left={<BackButton go={go} to="leads" />} />
-        <div className="empty-state">暂无客资详情</div>
+        <div className="empty-state">{loading ? "正在加载客资详情..." : "暂无客资详情"}</div>
+        {notice ? <div className="notice-card error">{notice}</div> : null}
       </div>
     );
   }
@@ -1125,9 +1161,12 @@ function LeadDetail({ state, setState, go }) {
     setContacting(true);
     setNotice("");
     try {
-      await api(`/api/leads/${lead.id}/contacted`, { method: "POST", body: "{}" });
-      const appState = await api("/api/app-state");
-      setState((current) => ({ ...current, ...appState }));
+      const result = await api(`/api/leads/${lead.id}/contacted`, { method: "POST", body: "{}" });
+      setLead(result.lead);
+      setState((current) => ({
+        ...current,
+        leads: current.leads.map((item) => item.id === result.lead.id ? result.lead : item)
+      }));
     } catch (error) {
       setNotice(`标记失败：${error.message}`);
     } finally {
@@ -1166,22 +1205,38 @@ function LeadDetail({ state, setState, go }) {
   }
 
   return (
-    <div className="screen">
-      <Header title="客资详情" left={<BackButton go={go} to="leads" />} right={<button className="link-btn" onClick={contact} disabled={contacting}>{contacting ? "标记中" : "标记已联系"}</button>} />
+    <div className="screen lead-detail-screen">
+      <Header title="客资详情" left={<BackButton go={go} to="leads" />} right={<button className="link-btn" onClick={contact} disabled={contacting || lead.status === "contacted"}>{contacting ? "标记中" : lead.status === "contacted" ? "已联系" : "标记已联系"}</button>} />
       <section className="lead-detail-card">
-        <span>留言时间</span>
-        <strong>{lead.createdAt}</strong>
-        <span>用户需求原文</span>
-        <p>{lead.buyerNeed}</p>
-        <span>关联商品</span>
-        <div className="linked-product">
-          <img src={lead.productImage} alt={lead.productTitle} />
-          <div><strong>{lead.productTitle}</strong><small>{money(lead.productPrice)}</small></div>
+        <div className="lead-field">
+          <span>留言时间</span>
+          <strong>{lead.createdAt}</strong>
+          <em className={lead.status === "contacted" ? "lead-status contacted" : "lead-status"}>{lead.status === "contacted" ? "已联系" : "待联系"}</em>
         </div>
-        <span>用户邮箱</span>
-        <strong>{lead.buyerEmail}</strong>
-        <span>商家账号</span>
-        <strong>{lead.sellerEmail}</strong>
+        <div className="lead-field">
+          <span>用户需求原文</span>
+          <p>{lead.buyerNeed}</p>
+        </div>
+        <div className="lead-field">
+          <span>关联商品</span>
+          <button className="linked-product" type="button" onClick={() => go(`product/${lead.productId}`)}>
+            {lead.productImage ? <img src={lead.productImage} alt={lead.productTitle} /> : <div className="product-thumb-empty"><Box size={22} /></div>}
+            <div>
+              <strong>{lead.productTitle}</strong>
+              <small>{money(lead.productPrice)}</small>
+              <b>{[lead.productCategory, lead.productSku].filter(Boolean).join(" · ")}</b>
+            </div>
+            <ChevronRight size={16} />
+          </button>
+        </div>
+        <div className="lead-field">
+          <span>用户邮箱</span>
+          <strong>{lead.buyerEmail}</strong>
+        </div>
+        <div className="lead-field">
+          <span>商家账号</span>
+          <strong>{lead.sellerEmail}</strong>
+        </div>
       </section>
       {notice ? <div className="notice-card error">{notice}</div> : null}
       <section className="followup-card">
@@ -1209,9 +1264,9 @@ function LeadDetail({ state, setState, go }) {
           <small>根据买家需求、商品和商家身份生成可直接发送的跟进话术。</small>
         )}
       </section>
-      <div className="double-actions bottom">
+      <div className="double-actions bottom lead-detail-actions">
         <button className="secondary-button" onClick={copyEmail}>{copied ? "已复制邮箱" : "复制邮箱"}</button>
-        <button className="primary-button" onClick={draftFollowup} disabled={drafting}>{drafting ? "生成中..." : "AI跟进"}</button>
+        <button className="primary-button" onClick={contact} disabled={contacting || lead.status === "contacted"}>{contacting ? "标记中..." : lead.status === "contacted" ? "已联系" : "标记已联系"}</button>
       </div>
     </div>
   );
@@ -1341,6 +1396,8 @@ export default function App() {
     leads: [],
     metrics: { listedProducts: 0, productQuota: 100, todayLeads: 0, totalLeads: 0 },
     match: null,
+    buyerDraftNeed: "",
+    buyerMessages: initialBuyerMessages,
     draft: null,
     agentRuns: [],
     publishImages: null,
