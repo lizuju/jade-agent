@@ -2,10 +2,10 @@ node_modules/
 dist/
 data/*.sqlite*
 public/uploads/
+.DS_Store
+__pycache__/
+*.py[cod]
 .playwright-cli/
 output/playwright/
 .env
 .env.*
-
-# LangGraph API
-.langgraph_api

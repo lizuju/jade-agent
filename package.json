@@ -7,18 +7,12 @@
     "dev": "node scripts/dev.js",
     "dev:web": "vite --host 127.0.0.1",
     "dev:api": "python3 -u -m backend.app",
-    "studio": "npx @langchain/langgraph-cli dev --no-browser",
     "build": "vite build",
     "start": "python3 -u -m backend.app",
     "seed": "python3 -u -m backend.app --seed-only"
   },
   "dependencies": {
-    "@langchain/langgraph": "^1.4.2",
-    "better-sqlite3": "^11.10.0",
-    "cors": "^2.8.5",
-    "express": "^5.1.0",
     "lucide-react": "^0.468.0",
-    "openai": "^6.9.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
