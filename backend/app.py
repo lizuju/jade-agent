@@ -305,7 +305,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/agent/capabilities":
             self.json_response({
                 "buyerMatch": ["frontend_need_validation", "backend_payload_validation", "python_agent_pipeline_orchestration", "deterministic_intent_routing", "session_context_refinement", "multi_dimensional_preference_profile", "semantic_need_recognition", "rule_validation", "product_documents_rag_retrieval", "semantic_rule_rag_ranking", "traceable_agent_runs"],
-                "merchantPublish": ["frontend_product_validation", "backend_product_validation", "merchant_uploaded_images", "uploaded_image_feature_analysis", "jade_image_validation", "python_publish_agent_generation", "product_document_indexing"],
+                "merchantPublish": ["frontend_product_validation", "backend_product_validation", "merchant_uploaded_images", "ollama_vision_agent_structured_recognition", "uploaded_image_feature_fallback", "jade_image_validation", "python_publish_agent_generation", "product_document_indexing"],
                 "leadFollowup": ["lead_authorization_check", "buyer_need_summary", "followup_copy_generation", "next_action_generation", "traceable_agent_runs"],
             })
             return
@@ -354,7 +354,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not isinstance(value, dict):
             return {}
         allowed = {
-            "width", "height", "aspectRatio", "foregroundRatio", "greenRatio", "paleRatio", "blueRatio",
+            "width", "height", "aspectRatio", "foregroundRatio", "greenRatio", "paleRatio", "blueRatio", "purpleRatio",
             "avgRgb", "jadeScore", "isJadeLike", "categoryGuess", "dominantTone", "waterGuess", "shapeGuess"
         }
         result = {}

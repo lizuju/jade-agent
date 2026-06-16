@@ -4,6 +4,7 @@ import uuid
 from urllib import request
 import json
 import os
+import base64
 from pathlib import Path
 
 from .db import (
@@ -24,6 +25,7 @@ from .validation import ValidationError
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = ROOT_DIR / "public" / "uploads"
+OLLAMA_VISION_CANDIDATES = ("qwen2.5vl", "qwen2-vl", "qwen3-vl", "llava", "bakllava", "minicpm-v", "moondream")
 
 SEMANTIC_CATALOG = {
     "categories": ["手镯", "吊坠", "项链", "戒面", "平安扣", "珠链", "手链", "手串", "无事牌", "耳坠", "挂件", "胸针", "把件", "摆件"],
@@ -1072,6 +1074,163 @@ def upload_analysis_for(image):
         return {}
 
 
+def analysis_purple_ratio(analysis):
+    try:
+        value = float(analysis.get("purpleRatio") or 0)
+        if value:
+            return value
+    except (TypeError, ValueError):
+        return 0
+    rgb = analysis.get("avgRgb")
+    if not isinstance(rgb, list) or len(rgb) < 3:
+        return 0
+    try:
+        r, g, b = [float(item) for item in rgb[:3]]
+    except (TypeError, ValueError):
+        return 0
+    if r > g * 1.08 and b > g * 1.04 and abs(r - b) < 90:
+        return min(0.7, max(0, ((r - g) + (b - g)) / 255))
+    return 0
+
+
+def normalize_upload_analysis(analysis):
+    result = dict(analysis or {})
+    purple_ratio = analysis_purple_ratio(result)
+    if purple_ratio >= 0.12:
+        result["purpleRatio"] = round(purple_ratio, 3)
+        if result.get("dominantTone") in {"", None, "浅色", "蓝水"}:
+            result["dominantTone"] = "紫罗兰"
+        try:
+            jade_score = float(result.get("jadeScore") or 0)
+        except (TypeError, ValueError):
+            jade_score = 0
+        if jade_score < 24:
+            result["jadeScore"] = min(92, round(45 + purple_ratio * 85))
+        result["isJadeLike"] = True
+    return result
+
+
+def upload_path_for(image):
+    if not isinstance(image, str) or not image.startswith("/uploads/"):
+        return None
+    path = UPLOAD_DIR / Path(image).name
+    return path if path.exists() else None
+
+
+def ollama_base_url():
+    return os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+
+
+def available_ollama_models():
+    try:
+        req = request.Request(f"{ollama_base_url()}/api/tags")
+        with request.urlopen(req, timeout=2) as response:
+            data = json.loads(response.read().decode())
+    except Exception:
+        return []
+    return [str(item.get("name") or item.get("model") or "") for item in data.get("models", [])]
+
+
+def ollama_vision_model():
+    configured = os.environ.get("OLLAMA_VISION_MODEL") or os.environ.get("VISION_MODEL")
+    if configured:
+        return configured
+    models = available_ollama_models()
+    for model in models:
+        if any(candidate in model.lower() for candidate in OLLAMA_VISION_CANDIDATES):
+            return model
+    return None
+
+
+def extract_json_object(text):
+    text = str(text or "").strip()
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", text, re.S)
+    if not match:
+        return {}
+    try:
+        value = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def normalize_vlm_category(value):
+    text = str(value or "").strip().lower()
+    mapping = [
+        (("手镯", "镯", "bangle", "bracelet"), "手镯"),
+        (("吊坠", "坠", "pendant"), "吊坠"),
+        (("项链", "necklace"), "项链"),
+        (("戒面", "蛋面", "ring", "cabochon"), "戒面"),
+        (("平安扣", "扣", "donut"), "平安扣"),
+        (("珠链", "bead necklace"), "珠链"),
+        (("手链", "手串", "bead bracelet"), "手串"),
+        (("无事牌", "牌", "plaque"), "无事牌"),
+        (("耳坠", "earring"), "耳坠"),
+        (("挂件", "charm"), "挂件"),
+    ]
+    for terms, category in mapping:
+        if any(term in text for term in terms):
+            return category
+    return value if value in SEMANTIC_CATALOG["categories"] else ""
+
+
+def ollama_vision_understanding(images):
+    if os.environ.get("VISION_PROVIDER", "ollama") == "none":
+        return {"provider": "local_feature_fallback", "error": "vision provider disabled"}
+    model = ollama_vision_model()
+    if not model:
+        return {"provider": "local_feature_fallback", "error": "no local vision model found"}
+    image_paths = [upload_path_for(image) for image in images]
+    image_paths = [path for path in image_paths if path]
+    if not image_paths:
+        return {"provider": "local_feature_fallback", "error": "no local upload image file"}
+    started = time.time()
+    prompt = (
+        "You are a jadeite product vision agent. Analyze the uploaded merchant product image. "
+        "Return only JSON with keys: is_jade boolean, category string, water string, color string, "
+        "shape string, visible_flaws string, confidence number 0-100, evidence array of short strings. "
+        "Use null when a field is not visible. Do not infer ring size or certificate from the image."
+    )
+    try:
+        encoded_images = [base64.b64encode(path.read_bytes()).decode() for path in image_paths[:3]]
+        payload = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt, "images": encoded_images}],
+            "stream": False,
+            "format": "json",
+        }).encode()
+        req = request.Request(f"{ollama_base_url()}/api/chat", data=payload, headers={"Content-Type": "application/json"})
+        with request.urlopen(req, timeout=int(os.environ.get("OLLAMA_VISION_TIMEOUT", "40"))) as response:
+            data = json.loads(response.read().decode())
+        content = (data.get("message") or {}).get("content")
+        parsed = extract_json_object(content)
+    except Exception as error:
+        return {"provider": "ollama_vision", "model": model, "error": str(error)[:180], "durationMs": round((time.time() - started) * 1000)}
+    if not parsed:
+        return {"provider": "ollama_vision", "model": model, "error": "empty vision json", "durationMs": round((time.time() - started) * 1000)}
+    confidence = price_or(parsed.get("confidence"), 0) or 0
+    return {
+        "provider": "ollama_vision",
+        "model": model,
+        "isJade": bool(parsed.get("is_jade") or parsed.get("isJade")),
+        "category": normalize_vlm_category(parsed.get("category")),
+        "water": str(parsed.get("water") or "").strip(),
+        "color": str(parsed.get("color") or "").strip(),
+        "shape": str(parsed.get("shape") or "").strip(),
+        "flaw": str(parsed.get("visible_flaws") or parsed.get("flaw") or "").strip(),
+        "confidence": max(0, min(100, int(confidence))),
+        "evidence": parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else [],
+        "durationMs": round((time.time() - started) * 1000),
+    }
+
+
 def merged_upload_analyses(images, supplied):
     supplied = supplied if isinstance(supplied, list) else []
     analyses = []
@@ -1080,7 +1239,7 @@ def merged_upload_analyses(images, supplied):
         if index < len(supplied) and isinstance(supplied[index], dict):
             merged.update(supplied[index])
         merged["url"] = image
-        analyses.append(merged)
+        analyses.append(normalize_upload_analysis(merged))
     return analyses
 
 
@@ -1114,6 +1273,38 @@ def publish_image_understanding(hint, images, supplied_analyses):
     analyses = merged_upload_analyses(images, supplied_analyses)
     if not analyses:
         raise ValidationError("Invalid publish request", [{"field": "images", "message": "请先上传翡翠商品图片"}])
+    vlm = ollama_vision_understanding(images)
+    if vlm.get("provider") == "ollama_vision" and not vlm.get("error"):
+        if not vlm.get("isJade") and vlm.get("confidence", 0) >= 70:
+            raise ValidationError("Invalid publish image", [{"field": "images", "message": "视觉模型判断该图片不是翡翠商品，请上传清晰的翡翠商品照片"}])
+        if vlm.get("isJade"):
+            need = heuristic_need(hint) if hint else {}
+            category = need.get("category") or vlm.get("category") or "手镯"
+            if category not in SEMANTIC_CATALOG["categories"]:
+                category = "手镯"
+            water = need.get("water") or vlm.get("water") or "种水待复核"
+            color = need.get("color") or vlm.get("color") or "颜色待复核"
+            shape = need.get("shape") or vlm.get("shape") or ""
+            size = publish_size_from_hint(need)
+            flaw = extract_first(hint, SEMANTIC_CATALOG["flawTerms"]) if hint else ""
+            scenes = [scene for scene in SEMANTIC_CATALOG["scenes"] if scene in hint]
+            confidence = min(98, max(55, round(vlm.get("confidence") or 0)))
+            return {
+                "category": category,
+                "water": water,
+                "color": color,
+                "shape": shape,
+                "size": size,
+                "flaw": flaw or vlm.get("flaw") or "以实物复核为准",
+                "scene": "/".join(scenes) or "日常佩戴",
+                "price": estimated_publish_price(category, water, color),
+                "confidence": confidence,
+                "analyses": analyses,
+                "isJade": True,
+                "provider": "ollama_vision",
+                "model": vlm.get("model"),
+                "evidence": vlm.get("evidence") or [],
+            }
     main = dominant_upload_signal(analyses)
     jade_score = max(float(item.get("jadeScore") or 0) for item in analyses)
     if not any(item.get("isJadeLike") for item in analyses) and jade_score < 24:
@@ -1141,6 +1332,9 @@ def publish_image_understanding(hint, images, supplied_analyses):
         "confidence": confidence,
         "analyses": analyses,
         "isJade": True,
+        "provider": vlm.get("provider") or "local_feature_fallback",
+        "model": vlm.get("model"),
+        "evidence": [vlm.get("error")] if vlm.get("error") else [],
     }
 
 
@@ -1193,6 +1387,9 @@ def local_draft(hint, images, image_analyses=None):
         "vision": {
             "isJade": vision["isJade"],
             "confidence": vision["confidence"],
+            "provider": vision.get("provider"),
+            "model": vision.get("model"),
+            "evidence": vision.get("evidence") or [],
             "imageCount": len(images),
             "category": vision["category"],
             "water": vision["water"],

@@ -141,10 +141,30 @@ function agentLabel(type) {
   return "商品发布 Agent";
 }
 
+function assetUrl(value) {
+  const raw = typeof value === "string" ? value : value?.url;
+  const src = String(raw || "").trim();
+  if (!src) return "";
+  if (/^(https?:|data:|blob:)/.test(src)) return src;
+  if (src.startsWith("/uploads/") && window.location.port === "5173") {
+    return `${window.location.protocol}//${window.location.hostname}:8787${src}`;
+  }
+  return src;
+}
+
+function SafeImage({ src, alt, className }) {
+  const [failed, setFailed] = useState(false);
+  const resolved = assetUrl(src);
+  if (!resolved || failed) {
+    return <div className={className ? `image-fallback ${className}` : "image-fallback"}><Box size={24} /></div>;
+  }
+  return <img className={className} src={resolved} alt={alt} onError={() => setFailed(true)} />;
+}
+
 function ProductCard({ product, onOpen }) {
   return (
     <button className="product-card" onClick={onOpen}>
-      <img src={product.images[0]} alt={product.title} />
+      <SafeImage src={product.images?.[0]} alt={product.title} />
       <div className="product-card-body">
         <strong>{product.title}</strong>
         <span>{product.tags.slice(0, 3).join(" · ")}</span>
@@ -208,6 +228,7 @@ function readImageForUpload(file) {
         let greenPixels = 0;
         let palePixels = 0;
         let bluePixels = 0;
+        let purplePixels = 0;
         let totalR = 0;
         let totalG = 0;
         let totalB = 0;
@@ -227,19 +248,21 @@ function readImageForUpload(file) {
           if (g > r * 1.04 && g > b * 1.02) greenPixels += 1;
           if (brightness > 118 && saturation < 0.34 && g >= r * 0.92) palePixels += 1;
           if (b > r * 1.05 && b >= g * 0.92) bluePixels += 1;
+          if (r > g * 1.08 && b > g * 1.04 && Math.abs(r - b) < 80) purplePixels += 1;
         }
         const sampleCount = Math.max(foreground, 1);
         const greenRatio = greenPixels / sampleCount;
         const paleRatio = palePixels / sampleCount;
         const blueRatio = bluePixels / sampleCount;
+        const purpleRatio = purplePixels / sampleCount;
         const avgR = totalR / sampleCount;
         const avgG = totalG / sampleCount;
         const avgB = totalB / sampleCount;
         const name = file.name.toLowerCase();
         const categoryGuess = name.includes("pendant") || name.includes("吊坠") || image.height > image.width * 1.18 ? "吊坠" : "手镯";
-        const dominantTone = blueRatio > 0.26 ? "蓝水" : greenRatio > 0.34 ? "飘绿" : paleRatio > 0.35 && avgG >= avgR ? "晴底" : paleRatio > 0.35 ? "白冰" : avgG > avgR && avgG > avgB ? "绿色系" : "浅色";
+        const dominantTone = purpleRatio > 0.12 && greenRatio > 0.08 ? "春彩" : purpleRatio > 0.12 ? "紫罗兰" : blueRatio > 0.26 ? "蓝水" : greenRatio > 0.34 ? "飘绿" : paleRatio > 0.35 && avgG >= avgR ? "晴底" : paleRatio > 0.35 ? "白冰" : avgG > avgR && avgG > avgB ? "绿色系" : "浅色";
         const waterGuess = paleRatio > 0.42 ? "冰种" : paleRatio > 0.24 ? "糯冰" : "糯种";
-        const jadeScore = Math.min(99, Math.round(greenRatio * 62 + paleRatio * 32 + blueRatio * 16 + (avgG >= avgR && avgG >= avgB ? 14 : 0)));
+        const jadeScore = Math.min(99, Math.round(greenRatio * 62 + paleRatio * 32 + blueRatio * 16 + purpleRatio * 70 + (avgG >= avgR && avgG >= avgB ? 14 : 0)));
         resolve({
           name: file.name,
           dataUrl,
@@ -251,9 +274,10 @@ function readImageForUpload(file) {
             greenRatio: Number(greenRatio.toFixed(3)),
             paleRatio: Number(paleRatio.toFixed(3)),
             blueRatio: Number(blueRatio.toFixed(3)),
+            purpleRatio: Number(purpleRatio.toFixed(3)),
             avgRgb: [Math.round(avgR), Math.round(avgG), Math.round(avgB)],
             jadeScore,
-            isJadeLike: jadeScore >= 24,
+            isJadeLike: jadeScore >= 24 || purpleRatio > 0.12,
             categoryGuess,
             dominantTone,
             waterGuess,
@@ -515,8 +539,8 @@ function ProductDetail({ product, go, setState }) {
     <div className="screen">
       <Header title="商品详情" left={<BackButton go={go} to="buyer" />} right={<button className="icon-btn" onClick={shareProduct} aria-label="分享商品"><Share2 size={20} /></button>} />
       <div className="hero-image">
-        <img src={product.images[0]} alt={product.title} />
-        <span>1/5</span>
+        <SafeImage src={product.images?.[0]} alt={product.title} />
+        <span>1/{product.images?.length || 1}</span>
       </div>
       <section className="detail-body">
         <h1>{product.title}</h1>
@@ -729,7 +753,7 @@ function PublishGuide({ state, setState, go }) {
       <section className="upload-card">
         <div className="step-title"><span>1.</span><strong>上传商品图片</strong><small>上传清晰的翡翠图片，AI将先校验图片再生成商品文案</small></div>
         <div className="upload-grid">
-          {images.map((image) => <img key={image} src={image} alt="上传商品" />)}
+          {images.map((image) => <SafeImage key={typeof image === "string" ? image : image?.url} src={image} alt="上传商品" />)}
           <label className="upload-add">
             <ImagePlus size={28} />
             <span>{uploading ? "上传中" : "上传图片"}</span>
@@ -788,13 +812,14 @@ function ProductEditorPreview({ draft }) {
   return (
     <section className="editor-preview">
       <div className="hero-image compact">
-        <img src={draft.images[0]} alt={draft.title} />
-        <span>1/{draft.images.length}</span>
+        <SafeImage src={draft.images?.[0]} alt={draft.title} />
+        <span>1/{draft.images?.length || 1}</span>
       </div>
       {vision ? (
         <div className="agent-trace compact">
           <div><CheckCircle2 size={16} /><span>图片校验</span><small>{vision.isJade ? `翡翠图片通过，置信度 ${vision.confidence}%` : "未通过"}</small></div>
           <div><CheckCircle2 size={16} /><span>识别字段</span><small>{[vision.category, vision.water, vision.color, vision.shape].filter(Boolean).join(" / ")}</small></div>
+          <div><CheckCircle2 size={16} /><span>识别来源</span><small>{vision.provider === "ollama_vision" ? `Ollama 视觉模型${vision.model ? `：${vision.model}` : ""}` : `本地图像特征兜底${vision.evidence?.[0] ? `：${vision.evidence[0]}` : ""}`}</small></div>
         </div>
       ) : null}
       <ReadOnlyField label="商品标题（10字以内）" value={draft.title} />
@@ -984,7 +1009,7 @@ function ProductManagement({ state, setState, go }) {
         <section className="product-list">
           {visibleProducts.map((product) => (
             <div className="manage-row" key={product.id}>
-              <img src={product.images[0]} alt={product.title} />
+              <SafeImage src={product.images?.[0]} alt={product.title} />
               <div>
                 <strong>{product.title}</strong>
                 <b>{money(product.price)}</b>
@@ -1108,8 +1133,8 @@ function EditProduct({ state, setState, go }) {
     <div className="screen">
       <Header title="编辑商品" left={<BackButton go={go} to="products" />} right={<button className="danger-link" onClick={() => setConfirmingDelete(true)} disabled={deleting || statusChanging}>{deleting ? "删除中" : "删除"}</button>} />
       <div className="hero-image compact">
-        <img src={draft.images[0]} alt={draft.title} />
-        <span>1/3</span>
+        <SafeImage src={draft.images?.[0]} alt={draft.title} />
+        <span>1/{draft.images?.length || 1}</span>
       </div>
       {confirmingDelete ? (
         <section className="notice-card danger">
@@ -1339,7 +1364,7 @@ function LeadDetail({ state, setState, go }) {
           <div className="lead-field">
             <span>关联商品</span>
             <button className="linked-product" type="button" onClick={() => go(`product/${lead.productId}`)}>
-              {lead.productImage ? <img src={lead.productImage} alt={lead.productTitle} /> : <div className="product-thumb-empty"><Box size={22} /></div>}
+              {lead.productImage ? <SafeImage src={lead.productImage} alt={lead.productTitle} /> : <div className="product-thumb-empty"><Box size={22} /></div>}
               <div>
                 <strong>{lead.productTitle}</strong>
                 <small>{money(lead.productPrice)}</small>
