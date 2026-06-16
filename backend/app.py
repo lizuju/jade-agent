@@ -181,7 +181,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "leads": leads,
                 "metrics": {
                     "listedProducts": len([product for product in products if product["status"] == "listed"]),
-                    "productQuota": 100,
+                    "productQuota": 1000,
                     "todayLeads": len([lead for lead in leads if str(lead["createdAt"]).startswith("2026-05-20")]),
                     "totalLeads": len(leads) + 125,
                     "managedProducts": len(active_products),
@@ -217,7 +217,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             files = self.read_json().get("files") or []
             if not files:
                 raise ValidationError("Invalid upload", [{"field": "images", "message": "请选择要上传的商品图片"}])
-            self.json_response({"images": [self.save_uploaded_image(file) for file in files[:6]]}, 201)
+            saved = [self.save_uploaded_image(file) for file in files[:6]]
+            self.json_response({"images": [item["url"] for item in saved], "analyses": [item["analysis"] for item in saved]}, 201)
             return
 
         if product_match and method == "PUT":
@@ -304,7 +305,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/agent/capabilities":
             self.json_response({
                 "buyerMatch": ["frontend_need_validation", "backend_payload_validation", "python_agent_pipeline_orchestration", "deterministic_intent_routing", "session_context_refinement", "multi_dimensional_preference_profile", "semantic_need_recognition", "rule_validation", "product_documents_rag_retrieval", "semantic_rule_rag_ranking", "traceable_agent_runs"],
-                "merchantPublish": ["frontend_product_validation", "backend_product_validation", "python_local_draft_generation", "merchant_uploaded_images", "product_document_indexing"],
+                "merchantPublish": ["frontend_product_validation", "backend_product_validation", "merchant_uploaded_images", "uploaded_image_feature_analysis", "jade_image_validation", "python_publish_agent_generation", "product_document_indexing"],
                 "leadFollowup": ["lead_authorization_check", "buyer_need_summary", "followup_copy_generation", "next_action_generation", "traceable_agent_runs"],
             })
             return
@@ -344,7 +345,24 @@ class ApiHandler(BaseHTTPRequestHandler):
         ext = match.group(1).split("/")[1].replace("jpeg", "jpg")
         filename = f"{int(time.time() * 1000)}-{os.urandom(5).hex()}.{ext}"
         (UPLOAD_DIR / filename).write_bytes(base64.b64decode(match.group(2)))
-        return f"/uploads/{filename}"
+        analysis = self.clean_upload_analysis(file.get("analysis"))
+        analysis.update({"name": str(file.get("name") or filename)[:120], "url": f"/uploads/{filename}"})
+        (UPLOAD_DIR / f"{filename}.meta.json").write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+        return {"url": f"/uploads/{filename}", "analysis": analysis}
+
+    def clean_upload_analysis(self, value):
+        if not isinstance(value, dict):
+            return {}
+        allowed = {
+            "width", "height", "aspectRatio", "foregroundRatio", "greenRatio", "paleRatio", "blueRatio",
+            "avgRgb", "jadeScore", "isJadeLike", "categoryGuess", "dominantTone", "waterGuess", "shapeGuess"
+        }
+        result = {}
+        for key in allowed:
+            item = value.get(key)
+            if isinstance(item, (str, int, float, bool)) or (key == "avgRgb" and isinstance(item, list)):
+                result[key] = item
+        return result
 
     def do_OPTIONS(self):
         self.send_response(204)

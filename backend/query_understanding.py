@@ -179,7 +179,7 @@ def first_allowed(value, allowed_values):
 
 
 def has_category_cue(raw_text):
-    return bool(re.search(r"手镯|镯|项链|颈链|脖子|挂坠|吊坠|挂件|耳|戒|指|牌|扣|珠链|手串|手链|手腕|戴脖子|脖子上戴|挂在", str(raw_text or "")))
+    return bool(re.search(r"手镯|镯|项链|颈链|脖子|挂坠|吊坠|挂件|耳|戒|指|牌|扣|珠链|手串|手链|手腕|胸针|别针|把件|手把件|摆件|戴脖子|脖子上戴|挂在", str(raw_text or "")))
 
 
 def has_water_cue(raw_text):
@@ -192,10 +192,14 @@ def has_product_cue(raw_text):
 
 def normalize_model_category(raw_text, value, allowed_categories):
     text = str(raw_text or "")
+    if re.search(r"项链|颈链|链子", text) and "项链" in allowed_categories:
+        return "项链"
     if re.search(r"项链|颈链|链子", text) and "珠链" in allowed_categories:
         return "珠链"
     if re.search(r"脖子|颈|项坠|挂坠|戴脖子|脖子上戴", text) and "吊坠" in allowed_categories:
         return "吊坠"
+    if re.search(r"手腕|手上戴|手链", text) and "手链" in allowed_categories:
+        return "手链"
     if re.search(r"手腕|手上戴|手链|手串", text) and value in {"挂件", "吊坠"} and "手串" in allowed_categories:
         return "手串"
     return value

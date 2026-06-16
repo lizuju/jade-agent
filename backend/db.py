@@ -9,6 +9,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 DB_PATH = DATA_DIR / "jade-agent.sqlite"
+PUBLIC_PRODUCT_TARGET = 500
 
 
 def connect():
@@ -720,13 +721,18 @@ def seed_query_concepts():
     concepts = [
         ("category", "手镯", "手镯", 50, ["手镯", "镯子", "玉镯", "翡翠镯", "翡翠手镯", "圆镯"], ["手镯", "正圈", "圆条", "贵妃"]),
         ("category", "吊坠", "吊坠", 50, ["吊坠", "坠子", "挂坠", "项坠", "链坠", "脖子上戴", "戴脖子", "脖子戴", "颈部佩戴", "佛公", "观音", "叶子", "如意", "葫芦"], ["吊坠", "水滴", "如意", "佛公", "观音", "叶子", "葫芦"]),
+        ("category", "项链", "项链", 52, ["项链", "翡翠项链", "颈链", "链子", "锁骨链", "脖链", "珠子项链"], ["项链", "圆珠", "算盘珠", "蛋面", "平安扣", "葫芦"]),
         ("category", "戒面", "戒面", 50, ["戒面", "戒指面", "蛋面", "裸石", "戒指主石", "戒指"], ["戒面", "蛋面", "马鞍", "随形"]),
         ("category", "平安扣", "平安扣", 50, ["平安扣", "怀古扣", "圆扣", "扣子"], ["平安扣", "圆扣", "怀古扣"]),
-        ("category", "珠链", "珠链", 50, ["珠链", "项链", "翡翠项链", "颈链", "链子", "珠子项链"], ["珠链", "项链", "圆珠", "算盘珠"]),
-        ("category", "手串", "手串", 50, ["手串", "手链", "串珠", "珠串", "手珠"], ["手串", "圆珠", "算盘珠"]),
+        ("category", "珠链", "珠链", 50, ["珠链", "圆珠链", "算盘珠链", "珠串项链"], ["珠链", "项链", "圆珠", "算盘珠"]),
+        ("category", "手链", "手链", 52, ["手链", "翡翠手链", "手腕链", "腕链", "串珠手链"], ["手链", "圆珠", "算盘珠", "随形珠"]),
+        ("category", "手串", "手串", 50, ["手串", "串珠", "珠串", "手珠"], ["手串", "圆珠", "算盘珠"]),
         ("category", "无事牌", "无事牌", 50, ["无事牌", "牌子", "素牌", "山水牌", "龙牌"], ["无事牌", "素牌", "山水牌", "龙牌"]),
         ("category", "耳坠", "耳坠", 50, ["耳坠", "耳饰", "耳环", "耳钉"], ["耳坠", "水滴", "葫芦", "蛋面"]),
         ("category", "挂件", "挂件", 50, ["挂件", "挂饰", "车挂", "包挂"], ["挂件", "佛公", "观音", "如意", "叶子", "葫芦"]),
+        ("category", "胸针", "胸针", 50, ["胸针", "别针", "胸花", "衣服别的", "胸口佩戴"], ["胸针", "花件", "叶子", "蝴蝶", "蛋面"]),
+        ("category", "把件", "把件", 50, ["把件", "手把件", "把玩件", "盘玩", "手里盘"], ["把件", "貔貅", "福瓜", "山水", "兽面"]),
+        ("category", "摆件", "摆件", 50, ["摆件", "案头", "桌摆", "家里摆", "办公室摆件"], ["摆件", "山水", "观音", "佛公", "貔貅"]),
         ("color", "蓝水", "偏蓝色", 46, ["偏蓝色", "偏蓝", "蓝色", "蓝水", "蓝调", "冷色调", "蓝绿色", "蓝底"], ["蓝水", "蓝色", "晴水"]),
         ("color", "晴底", "晴底色", 44, ["晴底", "晴水", "晴底色", "淡晴", "晴色", "清爽底色"], ["晴底", "晴底色", "晴水"]),
         ("color", "白冰", "白冰", 42, ["白冰", "冰白", "白色", "无色", "干净白", "透明白"], ["白冰", "冰白", "玻璃种", "冰种"]),
@@ -817,17 +823,22 @@ def sync_product_documents():
         upsert_product_document(product)
 
 
-def seed_catalog_products(seller_id, count=299):
+def seed_catalog_products(seller_id, count=PUBLIC_PRODUCT_TARGET):
     categories = [
         ("手镯", ["正圈", "圆条", "贵妃"], ["52mm", "53mm", "54mm", "55mm", "56mm", "57mm", "58mm", "59mm"], 28000),
         ("吊坠", ["水滴", "如意", "佛公", "观音", "叶子", "葫芦"], ["24x14mm", "28x16mm", "32x18mm", "36x21mm", "42x24mm"], 10000),
+        ("项链", ["圆珠", "算盘珠", "蛋面", "平安扣", "葫芦"], ["38cm", "40cm", "42cm", "45cm", "48cm"], 22000),
         ("戒面", ["蛋面", "马鞍", "随形"], ["8x6mm", "10x8mm", "12x10mm", "14x11mm", "16x12mm"], 16000),
         ("平安扣", ["圆扣", "怀古扣"], ["18mm", "22mm", "26mm", "30mm", "34mm"], 9000),
         ("珠链", ["圆珠", "算盘珠"], ["6mm珠", "7mm珠", "8mm珠", "9mm珠", "10mm珠"], 24000),
+        ("手链", ["圆珠", "算盘珠", "随形珠"], ["15cm", "16cm", "17cm", "18cm", "19cm"], 9000),
         ("手串", ["圆珠", "算盘珠"], ["6mm珠", "7mm珠", "8mm珠", "9mm珠", "10mm珠"], 12000),
         ("无事牌", ["素牌", "龙牌", "山水牌"], ["32x18mm", "38x22mm", "45x25mm", "52x31mm"], 18000),
         ("耳坠", ["水滴", "葫芦", "蛋面"], ["8x6mm", "10x8mm", "12x9mm", "15x10mm"], 7000),
         ("挂件", ["佛公", "观音", "如意", "叶子", "葫芦"], ["26x15mm", "32x18mm", "38x22mm", "45x26mm"], 11000),
+        ("胸针", ["花件", "叶子", "蝴蝶", "蛋面"], ["18x12mm", "22x15mm", "28x18mm", "36x22mm"], 13000),
+        ("把件", ["貔貅", "福瓜", "山水", "兽面"], ["45x28mm", "52x32mm", "60x38mm", "68x42mm"], 26000),
+        ("摆件", ["山水", "观音", "佛公", "貔貅"], ["68x45mm", "90x60mm", "120x80mm", "150x95mm"], 38000),
     ]
     waters = ["豆种", "糯种", "糯冰", "冰糯", "冰种", "高冰", "玻璃种"]
     colors = ["晴底", "晴水", "白冰", "飘花", "飘绿", "阳绿", "正阳绿", "满绿", "辣绿", "帝王绿", "蓝水", "紫罗兰", "春彩", "黄翡", "红翡", "油青", "墨翠"]
@@ -836,6 +847,11 @@ def seed_catalog_products(seller_id, count=299):
     water_price = {"豆种": 0.45, "糯种": 0.7, "糯冰": 0.95, "冰糯": 1.05, "冰种": 1.35, "高冰": 2.05, "玻璃种": 3.15}
     color_price = {"晴底": 1.08, "晴水": 1.12, "白冰": 1.05, "飘花": 1.2, "飘绿": 1.35, "阳绿": 1.9, "正阳绿": 2.6, "满绿": 3.2, "辣绿": 2.35, "帝王绿": 4.2, "蓝水": 1.3, "紫罗兰": 1.45, "春彩": 1.55, "黄翡": 1.18, "红翡": 1.28, "油青": 0.78, "墨翠": 1.75}
     flaw_price = {"无纹裂": 1.15, "肉眼干净": 1.1, "微瑕": 0.98, "轻微棉絮": 0.92, "少量石纹": 0.82, "边缘细小矿点": 0.88}
+    coverage = {
+        4: ("平安扣", "怀古扣", "26mm", "冰种", "晴底", "无纹裂", "送礼", 19800),
+        18: ("平安扣", "圆扣", "30mm", "冰种", "白冰", "无纹裂", "自用", 18600),
+        32: ("平安扣", "圆扣", "28mm", "糯冰", "晴水", "肉眼干净", "日常佩戴", 17200),
+    }
     products = []
     for index in range(count):
         category, shapes, sizes, base = categories[index % len(categories)]
@@ -846,6 +862,8 @@ def seed_catalog_products(seller_id, count=299):
         flaw = flaws[(index + 3) % len(flaws)]
         scene = scenes[(index + 1) % len(scenes)]
         price = max(1800, round(base * water_price[water] * color_price[color] * flaw_price[flaw] / 100) * 100 + (index % 7) * 300)
+        if index in coverage:
+            category, shape, size, water, color, flaw, scene, price = coverage[index]
         sku = f"JDAI-{index + 1:04d}"
         title = f"{water}{color}翡翠{shape}{category}"
         tags = compact([water, color, f"翡翠{category}", shape, size, flaw, "天然A货", "送礼佳品" if "礼" in scene else "自用"])
@@ -911,13 +929,6 @@ def seed_database():
                 "quality": quality,
             })
 
-    for product in seed_catalog_products(seller_id):
-        existing = db.execute("SELECT id FROM products WHERE sku = ?", (product["sku"],)).fetchone()
-        if existing:
-            update_product(existing["id"], product, seller_id)
-        else:
-            insert_product(product)
-
     premium = enrich_product({
         "sellerId": seller_id,
         "sku": "JDAI-PREMIUM-0001",
@@ -946,6 +957,22 @@ def seed_database():
         update_product(existing_premium["id"], premium, seller_id)
     else:
         insert_product(premium)
+
+    non_catalog_listed = db.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM products
+        WHERE status = 'listed'
+          AND (sku IS NULL OR sku NOT GLOB 'JDAI-[0-9][0-9][0-9][0-9]')
+        """
+    ).fetchone()["count"]
+    catalog_target = max(0, PUBLIC_PRODUCT_TARGET - non_catalog_listed)
+    for product in seed_catalog_products(seller_id, catalog_target):
+        existing = db.execute("SELECT id FROM products WHERE sku = ?", (product["sku"],)).fetchone()
+        if existing:
+            update_product(existing["id"], product, seller_id)
+        else:
+            insert_product(product)
 
     sync_product_documents()
 

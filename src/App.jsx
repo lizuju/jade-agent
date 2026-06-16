@@ -188,6 +188,85 @@ function validateProductDraft(draft) {
   return "";
 }
 
+function readImageForUpload(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      const image = new Image();
+      image.onerror = () => reject(new Error("图片解析失败"));
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        const size = 48;
+        canvas.width = size;
+        canvas.height = size;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        context.drawImage(image, 0, 0, size, size);
+        const data = context.getImageData(0, 0, size, size).data;
+        let foreground = 0;
+        let greenPixels = 0;
+        let palePixels = 0;
+        let bluePixels = 0;
+        let totalR = 0;
+        let totalG = 0;
+        let totalB = 0;
+        for (let index = 0; index < data.length; index += 4) {
+          const r = data[index];
+          const g = data[index + 1];
+          const b = data[index + 2];
+          const brightness = (r + g + b) / 3;
+          if (brightness < 28) continue;
+          foreground += 1;
+          totalR += r;
+          totalG += g;
+          totalB += b;
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          const saturation = max ? (max - min) / max : 0;
+          if (g > r * 1.04 && g > b * 1.02) greenPixels += 1;
+          if (brightness > 118 && saturation < 0.34 && g >= r * 0.92) palePixels += 1;
+          if (b > r * 1.05 && b >= g * 0.92) bluePixels += 1;
+        }
+        const sampleCount = Math.max(foreground, 1);
+        const greenRatio = greenPixels / sampleCount;
+        const paleRatio = palePixels / sampleCount;
+        const blueRatio = bluePixels / sampleCount;
+        const avgR = totalR / sampleCount;
+        const avgG = totalG / sampleCount;
+        const avgB = totalB / sampleCount;
+        const name = file.name.toLowerCase();
+        const categoryGuess = name.includes("pendant") || name.includes("吊坠") || image.height > image.width * 1.18 ? "吊坠" : "手镯";
+        const dominantTone = blueRatio > 0.26 ? "蓝水" : greenRatio > 0.34 ? "飘绿" : paleRatio > 0.35 && avgG >= avgR ? "晴底" : paleRatio > 0.35 ? "白冰" : avgG > avgR && avgG > avgB ? "绿色系" : "浅色";
+        const waterGuess = paleRatio > 0.42 ? "冰种" : paleRatio > 0.24 ? "糯冰" : "糯种";
+        const jadeScore = Math.min(99, Math.round(greenRatio * 62 + paleRatio * 32 + blueRatio * 16 + (avgG >= avgR && avgG >= avgB ? 14 : 0)));
+        resolve({
+          name: file.name,
+          dataUrl,
+          analysis: {
+            width: image.width,
+            height: image.height,
+            aspectRatio: Number((image.width / Math.max(image.height, 1)).toFixed(2)),
+            foregroundRatio: Number((foreground / (size * size)).toFixed(2)),
+            greenRatio: Number(greenRatio.toFixed(3)),
+            paleRatio: Number(paleRatio.toFixed(3)),
+            blueRatio: Number(blueRatio.toFixed(3)),
+            avgRgb: [Math.round(avgR), Math.round(avgG), Math.round(avgB)],
+            jadeScore,
+            isJadeLike: jadeScore >= 24,
+            categoryGuess,
+            dominantTone,
+            waterGuess,
+            shapeGuess: categoryGuess === "手镯" ? "正圈" : "水滴",
+          }
+        });
+      };
+      image.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function AgentEvidence({ match }) {
   if (!match?.validation && !match?.retrieval) return null;
   return (
@@ -590,7 +669,8 @@ function PublishGuide({ state, setState, go }) {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState("");
-  const [images, setImages] = useState(state.publishImages?.length ? state.publishImages : ["/assets/jade-upload-bangle.jpg", "/assets/jade-pendant.jpg"]);
+  const [images, setImages] = useState(state.publishImages?.length ? state.publishImages : []);
+  const [imageAnalyses, setImageAnalyses] = useState(state.publishImageAnalyses?.length ? state.publishImageAnalyses : []);
 
   async function uploadImages(event) {
     const files = Array.from(event.target.files ?? []);
@@ -598,19 +678,16 @@ function PublishGuide({ state, setState, go }) {
     setUploading(true);
     setNotice("");
     try {
-      const payload = await Promise.all(files.slice(0, 6).map((file) => new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve({ name: file.name, dataUrl: reader.result });
-        reader.onerror = () => reject(new Error("图片读取失败"));
-        reader.readAsDataURL(file);
-      })));
+      const payload = await Promise.all(files.slice(0, 6).map(readImageForUpload));
       const result = await api("/api/uploads/images", {
         method: "POST",
         body: JSON.stringify({ files: payload })
       });
       const nextImages = [...images, ...result.images].slice(0, 6);
+      const nextAnalyses = [...imageAnalyses, ...(result.analyses ?? payload.map((item) => item.analysis))].slice(0, 6);
       setImages(nextImages);
-      setState((current) => ({ ...current, publishImages: nextImages }));
+      setImageAnalyses(nextAnalyses);
+      setState((current) => ({ ...current, publishImages: nextImages, publishImageAnalyses: nextAnalyses, draft: null }));
     } catch (error) {
       setNotice(`上传失败：${error.message}`);
     } finally {
@@ -621,14 +698,19 @@ function PublishGuide({ state, setState, go }) {
 
   async function generateDraft() {
     if (loading || uploading) return;
+    if (!images.length) {
+      setNotice("请先上传清晰的翡翠商品图片。");
+      return;
+    }
     setLoading(true);
     setNotice("");
     try {
       const draft = await api("/api/agent/publish", {
         method: "POST",
         body: JSON.stringify({
-          hint: "冰种晴底翡翠手镯，55圈口，正圈，无纹裂，适合送礼",
-          images
+          hint: "",
+          images,
+          imageAnalyses
         })
       });
       const runs = await api("/api/agent/runs");
@@ -645,7 +727,7 @@ function PublishGuide({ state, setState, go }) {
     <div className="screen">
       <Header title="发布商品" left={<BackButton go={go} />} right={<span className="saving">{loading ? "AI生成中" : uploading ? "上传中" : "AI辅助"}</span>} />
       <section className="upload-card">
-        <div className="step-title"><span>1.</span><strong>上传商品图片</strong><small>上传清晰的翡翠图片，AI将根据图片和描述生成商品文案</small></div>
+        <div className="step-title"><span>1.</span><strong>上传商品图片</strong><small>上传清晰的翡翠图片，AI将先校验图片再生成商品文案</small></div>
         <div className="upload-grid">
           {images.map((image) => <img key={image} src={image} alt="上传商品" />)}
           <label className="upload-add">
@@ -658,7 +740,7 @@ function PublishGuide({ state, setState, go }) {
       </section>
       <section className="steps-card">
         {[
-          ["2.", "AI智能生成", loading ? "正在识别图片特征，生成商品信息..." : "点击按钮后生成标题、描述、标签和价格"],
+          ["2.", "AI智能生成", loading ? "正在校验翡翠图片并识别字段..." : "点击按钮后生成标题、描述、标签和价格"],
           ["3.", "编辑商品信息", "可修改AI生成的标题、描述、标签和价格"],
           ["4.", "提交发布", "发布后商品将展示给平台买家"]
         ].map(([no, title, text]) => (
@@ -668,36 +750,53 @@ function PublishGuide({ state, setState, go }) {
           </div>
         ))}
       </section>
-      <button className="primary-button publish-action" onClick={generateDraft} disabled={loading || uploading}>
+      <button className="primary-button publish-action" onClick={generateDraft} disabled={loading || uploading || !images.length}>
         <Wand2 size={18} />
-        {loading ? "AI正在生成..." : uploading ? "图片上传中..." : "AI生成商品信息"}
+        {loading ? "AI正在生成..." : uploading ? "图片上传中..." : images.length ? "AI生成商品信息" : "先上传图片"}
       </button>
-      <small className="quota-text">免费商家最多发布2件商品，当前已发布1/2件</small>
+      <small className="quota-text">当前商品额度 {state.metrics.listedProducts}/{state.metrics.productQuota} 件</small>
     </div>
   );
 }
 
 function PublishResult({ state, go }) {
-  const draft = state.draft ?? state.products[0];
+  const draft = state.draft;
   return (
     <div className="screen">
       <Header title="AI智能生成结果" left={<BackButton go={go} to="publish" />} right={<button className="link-btn" onClick={() => go("publish")}>重新生成</button>} />
-      <ProductEditorPreview draft={draft} />
-      <div className="double-actions">
-        <button className="secondary-button" onClick={() => go("publish")}>重新生成</button>
-        <button className="primary-button" onClick={() => go("editInfo")}>进入编辑</button>
-      </div>
+      {draft ? (
+        <>
+          <ProductEditorPreview draft={draft} />
+          <div className="double-actions">
+            <button className="secondary-button" onClick={() => go("publish")}>重新生成</button>
+            <button className="primary-button" onClick={() => go("editInfo")}>进入编辑</button>
+          </div>
+        </>
+      ) : (
+        <section className="empty-state">
+          <strong>还没有生成商品信息</strong>
+          <span>请先上传商家实拍翡翠图片，再由 AI 生成商品信息。</span>
+          <button className="primary-button" onClick={() => go("publish")}>去上传图片</button>
+        </section>
+      )}
     </div>
   );
 }
 
 function ProductEditorPreview({ draft }) {
+  const vision = draft.vision;
   return (
     <section className="editor-preview">
       <div className="hero-image compact">
         <img src={draft.images[0]} alt={draft.title} />
-        <span>1/3</span>
+        <span>1/{draft.images.length}</span>
       </div>
+      {vision ? (
+        <div className="agent-trace compact">
+          <div><CheckCircle2 size={16} /><span>图片校验</span><small>{vision.isJade ? `翡翠图片通过，置信度 ${vision.confidence}%` : "未通过"}</small></div>
+          <div><CheckCircle2 size={16} /><span>识别字段</span><small>{[vision.category, vision.water, vision.color, vision.shape].filter(Boolean).join(" / ")}</small></div>
+        </div>
+      ) : null}
       <ReadOnlyField label="商品标题（10字以内）" value={draft.title} />
       <ReadOnlyField label="商品简介（50字以内）" value={draft.intro} />
       <ReadOnlyField label="商品详情（300字以内）" value={draft.detail} multiline />
@@ -720,11 +819,24 @@ function ReadOnlyField({ label, value, multiline }) {
 }
 
 function EditInfo({ state, setState, go }) {
-  const [draft, setDraft] = useState(state.draft ?? state.products[0]);
+  const [draft, setDraft] = useState(state.draft);
   const [saving, setSaving] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [notice, setNotice] = useState("");
   const set = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
+
+  if (!draft) {
+    return (
+      <div className="screen">
+        <Header title="编辑商品信息" left={<BackButton go={go} to="publish" />} />
+        <section className="empty-state">
+          <strong>没有可编辑的商品草稿</strong>
+          <span>请先上传图片并生成商品信息。</span>
+          <button className="primary-button" onClick={() => go("publish")}>去上传图片</button>
+        </section>
+      </div>
+    );
+  }
 
   function addTag() {
     const tag = window.prompt("请输入商品标签");
@@ -859,14 +971,16 @@ function ProductManagement({ state, setState, go }) {
   }
 
   return (
-    <div className="screen with-nav">
-      <div className="nav-scroll">
+    <div className="screen with-nav fixed-tabs-screen">
+      <div className="fixed-list-head">
         <Header title="商品管理" left={<BackButton go={go} />} />
         <div className="tabs product-tabs">
           {tabs.map(([key, label]) => (
             <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key)}>{label}</button>
           ))}
         </div>
+      </div>
+      <div className="nav-scroll fixed-list-scroll">
         <section className="product-list">
           {visibleProducts.map((product) => (
             <div className="manage-row" key={product.id}>
@@ -1066,14 +1180,16 @@ function LeadsList({ state, setState, go }) {
   }
 
   return (
-    <div className="screen with-nav">
-      <div className="nav-scroll">
+    <div className="screen with-nav fixed-tabs-screen">
+      <div className="fixed-list-head">
         <Header title="客资列表" left={<BackButton go={go} />} />
         <div className="tabs three">
           {tabs.map(([key, label]) => (
             <button key={key} className={filter === key ? "active" : ""} onClick={() => selectFilter(key)} disabled={filtering}>{label}</button>
           ))}
         </div>
+      </div>
+      <div className="nav-scroll fixed-list-scroll">
         <section className="lead-list">
           {filteredLeads.map((lead) => (
             <button className="lead-line" key={lead.id} onClick={() => {
@@ -1149,8 +1265,10 @@ function LeadDetail({ state, setState, go }) {
     return (
       <div className="screen lead-detail-screen">
         <Header title="客资详情" left={<BackButton go={go} to="leads" />} />
-        <div className="empty-state">{loading ? "正在加载客资详情..." : "暂无客资详情"}</div>
-        {notice ? <div className="notice-card error">{notice}</div> : null}
+        <div className="lead-detail-scroll">
+          <div className="empty-state">{loading ? "正在加载客资详情..." : "暂无客资详情"}</div>
+          {notice ? <div className="notice-card error">{notice}</div> : null}
+        </div>
       </div>
     );
   }
@@ -1207,63 +1325,65 @@ function LeadDetail({ state, setState, go }) {
   return (
     <div className="screen lead-detail-screen">
       <Header title="客资详情" left={<BackButton go={go} to="leads" />} right={<button className="link-btn" onClick={contact} disabled={contacting || lead.status === "contacted"}>{contacting ? "标记中" : lead.status === "contacted" ? "已联系" : "标记已联系"}</button>} />
-      <section className="lead-detail-card">
-        <div className="lead-field">
-          <span>留言时间</span>
-          <strong>{lead.createdAt}</strong>
-          <em className={lead.status === "contacted" ? "lead-status contacted" : "lead-status"}>{lead.status === "contacted" ? "已联系" : "待联系"}</em>
-        </div>
-        <div className="lead-field">
-          <span>用户需求原文</span>
-          <p>{lead.buyerNeed}</p>
-        </div>
-        <div className="lead-field">
-          <span>关联商品</span>
-          <button className="linked-product" type="button" onClick={() => go(`product/${lead.productId}`)}>
-            {lead.productImage ? <img src={lead.productImage} alt={lead.productTitle} /> : <div className="product-thumb-empty"><Box size={22} /></div>}
-            <div>
-              <strong>{lead.productTitle}</strong>
-              <small>{money(lead.productPrice)}</small>
-              <b>{[lead.productCategory, lead.productSku].filter(Boolean).join(" · ")}</b>
-            </div>
-            <ChevronRight size={16} />
-          </button>
-        </div>
-        <div className="lead-field">
-          <span>用户邮箱</span>
-          <strong>{lead.buyerEmail}</strong>
-        </div>
-        <div className="lead-field">
-          <span>商家账号</span>
-          <strong>{lead.sellerEmail}</strong>
-        </div>
-      </section>
-      {notice ? <div className="notice-card error">{notice}</div> : null}
-      <section className="followup-card">
-        <div className="section-head">
-          <h3>AI跟进 Agent</h3>
-          <button className="link-btn" onClick={draftFollowup} disabled={drafting}>{drafting ? "生成中" : "生成话术"}</button>
-        </div>
-        {followup ? (
-          <>
-            <p>{followup.reply}</p>
-            <div className="action-chips">
-              {followup.nextActions.map((item) => <span key={item}>{item}</span>)}
-            </div>
-            <div className="agent-trace compact">
-              {followup.trace.map((step) => (
-                <div key={step.label}>
-                  <CheckCircle2 size={15} />
-                  <span>{step.label}</span>
-                  <small>{step.detail}</small>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : (
-          <small>根据买家需求、商品和商家身份生成可直接发送的跟进话术。</small>
-        )}
-      </section>
+      <div className="lead-detail-scroll">
+        <section className="lead-detail-card">
+          <div className="lead-field">
+            <span>留言时间</span>
+            <strong>{lead.createdAt}</strong>
+            <em className={lead.status === "contacted" ? "lead-status contacted" : "lead-status"}>{lead.status === "contacted" ? "已联系" : "待联系"}</em>
+          </div>
+          <div className="lead-field">
+            <span>用户需求原文</span>
+            <p>{lead.buyerNeed}</p>
+          </div>
+          <div className="lead-field">
+            <span>关联商品</span>
+            <button className="linked-product" type="button" onClick={() => go(`product/${lead.productId}`)}>
+              {lead.productImage ? <img src={lead.productImage} alt={lead.productTitle} /> : <div className="product-thumb-empty"><Box size={22} /></div>}
+              <div>
+                <strong>{lead.productTitle}</strong>
+                <small>{money(lead.productPrice)}</small>
+                <b>{[lead.productCategory, lead.productSku].filter(Boolean).join(" · ")}</b>
+              </div>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+          <div className="lead-field">
+            <span>用户邮箱</span>
+            <strong>{lead.buyerEmail}</strong>
+          </div>
+          <div className="lead-field">
+            <span>商家账号</span>
+            <strong>{lead.sellerEmail}</strong>
+          </div>
+        </section>
+        {notice ? <div className="notice-card error">{notice}</div> : null}
+        <section className="followup-card">
+          <div className="section-head">
+            <h3>AI跟进 Agent</h3>
+            <button className="link-btn" onClick={draftFollowup} disabled={drafting}>{drafting ? "生成中" : "生成话术"}</button>
+          </div>
+          {followup ? (
+            <>
+              <p>{followup.reply}</p>
+              <div className="action-chips">
+                {followup.nextActions.map((item) => <span key={item}>{item}</span>)}
+              </div>
+              <div className="agent-trace compact">
+                {followup.trace.map((step) => (
+                  <div key={step.label}>
+                    <CheckCircle2 size={15} />
+                    <span>{step.label}</span>
+                    <small>{step.detail}</small>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <small>根据买家需求、商品和商家身份生成可直接发送的跟进话术。</small>
+          )}
+        </section>
+      </div>
       <div className="double-actions bottom lead-detail-actions">
         <button className="secondary-button" onClick={copyEmail}>{copied ? "已复制邮箱" : "复制邮箱"}</button>
         <button className="primary-button" onClick={contact} disabled={contacting || lead.status === "contacted"}>{contacting ? "标记中..." : lead.status === "contacted" ? "已联系" : "标记已联系"}</button>
@@ -1302,12 +1422,12 @@ function AccountPermissions({ go }) {
       {showBenefits ? (
         <section className="notice-card">
           <strong>VIP权益</strong>
-          <span>商品上架上限100件、完整邮箱查看、AI发布与AI跟进优先队列、优先展示权重。</span>
+          <span>商品上架上限1000件、完整邮箱查看、AI发布与AI跟进优先队列、优先展示权重。</span>
         </section>
       ) : null}
       <section className="permission-list">
         {[
-          ["商品发布上限", "100 / 100件"],
+          ["商品发布上限", `${state.metrics.listedProducts} / ${state.metrics.productQuota}件`],
           ["今日客资", "8条"],
           ["买家联系方式", "完整邮箱查看"],
           ["优先展示权重", "高"]
@@ -1356,32 +1476,35 @@ function Profile({ state, setState, go }) {
   }
 
   return (
-    <div className="screen">
-      <Header title="个人中心" left={<BackButton go={go} />} />
-      <section className="profile-card">
-        <span className="logo-mark">翠</span>
-        <div>
-          <strong>{state.seller?.email ?? sellerEmail}</strong>
-          <small><b className="vip-badge">VIP会员</b> 有效期至 2026-05-20</small>
-        </div>
-      </section>
-      <section className="menu-list">
-        {[
-          [User, "账户信息"],
-          [MessageCircle, "绑定邮箱"],
-          [Store, "商家店铺"],
-          [ShieldCheck, "帮助中心"],
-          [Inbox, "关于我们"],
-          [LockKeyhole, "退出登录"]
-        ].map(([Icon, label]) => (
-          <button key={label} onClick={() => handleMenu(label)} disabled={label === "退出登录" && loggingOut}>
-            <Icon size={18} />
-            <span>{label === "退出登录" && loggingOut ? "退出中" : label}</span>
-            <ChevronRight size={16} />
-          </button>
-        ))}
-      </section>
-      {notice ? <div className="notice-card">{notice}</div> : null}
+    <div className="screen with-nav">
+      <div className="nav-scroll">
+        <Header title="个人中心" left={<BackButton go={go} />} />
+        <section className="profile-card">
+          <span className="logo-mark">翠</span>
+          <div>
+            <strong>{state.seller?.email ?? sellerEmail}</strong>
+            <small><b className="vip-badge">VIP会员</b> 有效期至 2026-05-20</small>
+          </div>
+        </section>
+        <section className="menu-list">
+          {[
+            [User, "账户信息"],
+            [MessageCircle, "绑定邮箱"],
+            [Store, "商家店铺"],
+            [ShieldCheck, "帮助中心"],
+            [Inbox, "关于我们"],
+            [LockKeyhole, "退出登录"]
+          ].map(([Icon, label]) => (
+            <button key={label} onClick={() => handleMenu(label)} disabled={label === "退出登录" && loggingOut}>
+              <Icon size={18} />
+              <span>{label === "退出登录" && loggingOut ? "退出中" : label}</span>
+              <ChevronRight size={16} />
+            </button>
+          ))}
+        </section>
+        {notice ? <div className="notice-card">{notice}</div> : null}
+      </div>
+      <BottomNav active="profile" go={go} />
     </div>
   );
 }
@@ -1394,13 +1517,14 @@ export default function App() {
     seller: null,
     products: [],
     leads: [],
-    metrics: { listedProducts: 0, productQuota: 100, todayLeads: 0, totalLeads: 0 },
+    metrics: { listedProducts: 0, productQuota: 1000, todayLeads: 0, totalLeads: 0 },
     match: null,
     buyerDraftNeed: "",
     buyerMessages: initialBuyerMessages,
     draft: null,
     agentRuns: [],
     publishImages: null,
+    publishImageAnalyses: [],
     followupByLead: {},
     lastTrace: []
   });

@@ -4,6 +4,7 @@ import uuid
 from urllib import request
 import json
 import os
+from pathlib import Path
 
 from .db import (
     add_message,
@@ -18,10 +19,14 @@ from .db import (
     update_session_state,
 )
 from .query_understanding import understand_query_concepts
+from .validation import ValidationError
 
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = ROOT_DIR / "public" / "uploads"
 
 SEMANTIC_CATALOG = {
-    "categories": ["手镯", "吊坠", "戒面", "平安扣", "珠链", "手串", "无事牌", "耳坠", "挂件"],
+    "categories": ["手镯", "吊坠", "项链", "戒面", "平安扣", "珠链", "手链", "手串", "无事牌", "耳坠", "挂件", "胸针", "把件", "摆件"],
     "waters": ["豆种", "糯种", "糯冰", "冰糯", "冰种", "高冰", "玻璃种"],
     "colors": ["晴底", "晴底色", "晴水", "白冰", "飘花", "飘绿", "阳绿", "正阳绿", "满绿", "辣绿", "蓝水", "紫罗兰", "春彩", "黄翡", "红翡", "油青", "墨翠", "帝王绿"],
     "shapes": ["正圈", "圆条", "贵妃", "水滴", "如意", "佛公", "观音", "叶子", "葫芦", "蛋面", "马鞍", "圆扣", "怀古扣", "圆珠", "算盘珠", "素牌", "龙牌"],
@@ -36,6 +41,16 @@ COLOR_FAMILIES = {
     "晴底": ["晴底", "晴底色"],
     "白冰": ["白冰", "冰白"],
     "蓝水": ["蓝水", "晴水", "蓝色", "偏蓝", "蓝调"],
+}
+
+WATER_FAMILIES = {
+    "豆种": ["豆种"],
+    "糯种": ["糯种"],
+    "糯冰": ["糯冰", "冰糯"],
+    "冰糯": ["冰糯", "糯冰"],
+    "冰种": ["冰种", "高冰", "玻璃种"],
+    "高冰": ["高冰", "玻璃种"],
+    "玻璃种": ["玻璃种"],
 }
 
 FLAW_FAMILIES = {
@@ -88,16 +103,16 @@ def extract_sizes(text):
 
 
 def extract_budget(text):
-    range_match = re.search(r"(\d+(?:\.\d+)?)\s*(万|w|W|k|K)?\s*(?:到|至|-|~)\s*(\d+(?:\.\d+)?)\s*(万|w|W|k|K)?", text)
+    range_match = re.search(r"(\d+(?:\.\d+)?)\s*(万|w|W|k|K|元|块|人民币|rmb|RMB)?\s*(?:到|至|-|~)\s*(\d+(?:\.\d+)?)\s*(万|w|W|k|K|元|块|人民币|rmb|RMB)?", text)
     if range_match:
         unit = range_match.group(4) or range_match.group(2) or ""
         return price_or(f"{range_match.group(3)}{unit}")
-    unit_match = re.search(r"(\d+(?:\.\d+)?)\s*(万|w|W|k|K)", text)
+    unit_match = re.search(r"(\d+(?:\.\d+)?)\s*(万|w|W|k|K|元|块|人民币|rmb|RMB)", text)
     if unit_match:
         return price_or(f"{unit_match.group(1)}{unit_match.group(2)}")
     budget_match = (
-        re.search(r"(?:预算|价位|价格|以内|左右|不超过|控制在)[^\d]{0,6}(\d+(?:\.\d+)?)\s*(万|w|W|k|K)?", text)
-        or re.search(r"(\d+(?:\.\d+)?)\s*(万|w|W|k|K)?\s*(?:预算|以内|左右|价位|价格)", text)
+        re.search(r"(?:预算|价位|价格|以内|左右|不超过|控制在)[^\d]{0,6}(\d+(?:\.\d+)?)\s*(万|w|W|k|K|元|块|人民币|rmb|RMB)?", text)
+        or re.search(r"(\d+(?:\.\d+)?)\s*(万|w|W|k|K|元|块|人民币|rmb|RMB)?\s*(?:预算|以内|左右|价位|价格)", text)
     )
     if not budget_match:
         return None
@@ -373,16 +388,120 @@ def validate_need_rules(need):
 def budget_limit(need):
     if not need.get("budget"):
         return None
+    if need.get("budgetLimit"):
+        return need["budgetLimit"]
     return need["budget"] * (1.12 if need.get("budgetSoft") else 1)
 
 
 def expand_need_terms(need):
     terms = [*(need.get("queryTerms") or []), *((need.get("preferenceProfile") or {}).get("queryTerms") or [])]
+    if need.get("water"):
+        terms.extend(WATER_FAMILIES.get(need["water"], [need["water"]]))
     if need.get("color"):
         terms.extend(COLOR_FAMILIES.get(need["color"], [need["color"]]))
     for must in need.get("mustHave") or []:
         terms.extend(FLAW_FAMILIES.get(must, [must]))
     return make_query_terms(terms)
+
+
+def product_matches_family(product, evidence, value, families):
+    return any(term_matches_product(product, evidence, term) for term in families.get(value, [value]))
+
+
+def product_matches_explicit_constraints(product, need):
+    evidence = product_evidence_text(product)
+    if need.get("category") and product["category"] != need["category"]:
+        return False
+    if need.get("water") and not product_matches_family(product, evidence, need["water"], WATER_FAMILIES):
+        return False
+    if need.get("color") and not product_matches_family(product, evidence, need["color"], COLOR_FAMILIES):
+        return False
+    if need.get("shape") and not term_matches_product(product, evidence, need["shape"]):
+        return False
+    for size in need.get("sizes") or []:
+        if not product_matches_size(product, size):
+            return False
+    for must in need.get("mustHave") or []:
+        if not product_satisfies_must(product, must):
+            return False
+    return True
+
+
+def product_matches_size(product, size):
+    match = re.search(r"([1-9]\d?(?:\.\d)?)", str(size or ""))
+    if not match:
+        return False
+    number = re.escape(match.group(1))
+    fields = " ".join(str(value or "") for value in [product.get("size"), product.get("diameter"), (product.get("specs") or {}).get("size"), (product.get("specs") or {}).get("diameter")])
+    return bool(re.search(rf"(?<!\d){number}(?:\.0)?\s*(?:mm|毫米|圈口|圈)?(?!\d)", fields, re.I))
+
+
+def inventory_boundary_check(need, inventory):
+    listed = [product for product in inventory if product["status"] == "listed"]
+    scoped = listed
+    blockers = []
+    if need.get("category"):
+        category_pool = [product for product in scoped if product["category"] == need["category"]]
+        if not category_pool:
+            supported = "、".join(sorted({product["category"] for product in listed})[:8])
+            blockers.append({"label": "品类", "value": need["category"], "detail": f"当前上架货源没有该品类；可选品类包括 {supported}"})
+        scoped = category_pool
+    if not need.get("category") and need.get("budget") and not any([need.get("water"), need.get("color"), need.get("shape"), need.get("sizes"), need.get("mustHave")]):
+        supported = "、".join(sorted({product["category"] for product in listed})[:8])
+        blockers.append({"label": "品类", "value": "未确认", "detail": f"只识别到预算，缺少可稳定匹配的品类或偏好；可选品类包括 {supported}"})
+    for field, label, families in [("water", "种水", WATER_FAMILIES), ("color", "颜色", COLOR_FAMILIES)]:
+        value = need.get(field)
+        if not value or not scoped:
+            continue
+        matched = [product for product in scoped if product_matches_family(product, product_evidence_text(product), value, families)]
+        if not matched:
+            blockers.append({"label": label, "value": value, "detail": f"当前约束下没有匹配「{value}」的上架货源"})
+        scoped = matched
+    if need.get("shape") and scoped:
+        matched = [product for product in scoped if term_matches_product(product, product_evidence_text(product), need["shape"])]
+        if not matched:
+            blockers.append({"label": "器型", "value": need["shape"], "detail": f"当前约束下没有匹配「{need['shape']}」的上架货源"})
+        scoped = matched
+    for size in need.get("sizes") or []:
+        if not scoped:
+            continue
+        matched = [product for product in scoped if product_matches_size(product, size)]
+        if not matched:
+            blockers.append({"label": "尺寸", "value": size, "detail": f"当前约束下没有匹配「{size}」的上架货源"})
+        scoped = matched
+    for must in need.get("mustHave") or []:
+        if not scoped:
+            continue
+        matched = [product for product in scoped if product_satisfies_must(product, must)]
+        if not matched:
+            blockers.append({"label": "硬性要求", "value": must, "detail": f"当前约束下没有满足「{must}」的上架货源"})
+        scoped = matched
+    if need.get("budget") and scoped:
+        limit = budget_limit(need)
+        matched = [product for product in scoped if product["price"] <= limit]
+        if not matched:
+            min_price = min(product["price"] for product in scoped)
+            blockers.append({"label": "预算", "value": f"￥{need['budget']:,}", "detail": f"满足前面条件的最低上架价约￥{min_price:,}，当前预算内没有货源"})
+    return {"blocking": bool(blockers), "blockers": blockers[:3], "scopedCount": len(scoped), "total": len(listed)}
+
+
+def inventory_boundary_reply(boundary):
+    details = "；".join(blocker["detail"] for blocker in boundary["blockers"])
+    return f"我先做了库存边界校验：{details}。您可以放宽其中一个条件，或补充新的品类、预算、尺寸范围，我再继续匹配。"
+
+
+def apply_budget_relaxation(need, inventory):
+    strict_limit = budget_limit(need)
+    if not strict_limit or need.get("budgetSoft"):
+        return need, None
+    exact_products = [product for product in inventory if product_matches_explicit_constraints(product, need)]
+    if not exact_products or any(product["price"] <= strict_limit for product in exact_products):
+        return need, None
+    relaxed_limit = round(need["budget"] * 1.12)
+    nearest = min(exact_products, key=lambda product: abs(product["price"] - need["budget"]))
+    if nearest["price"] > relaxed_limit:
+        return need, None
+    return {**need, "budgetLimit": relaxed_limit, "budgetRelaxed": True}, nearest
 
 
 def evaluate_product_rules(product, need):
@@ -404,6 +523,7 @@ def evaluate_product_rules(product, need):
     if not need.get("budget"):
         score += 4
     else:
+        limit = budget_limit(need)
         ratio = product["price"] / need["budget"]
         distance = abs(product["price"] - need["budget"]) / need["budget"]
         if product["price"] <= need["budget"] and ratio >= 0.72:
@@ -415,11 +535,22 @@ def evaluate_product_rules(product, need):
         elif product["price"] <= need["budget"]:
             score += 4
             failed.append("价格明显低于预算段")
-        elif need.get("budgetSoft") and product["price"] <= budget_limit(need):
+        elif (need.get("budgetSoft") or need.get("budgetRelaxed")) and product["price"] <= limit:
             score += max(10, round(30 - distance * 100))
             passed.append("价格略超预算")
         else:
             failed.append("价格超过预算")
+    if need.get("water"):
+        family = WATER_FAMILIES.get(need["water"], [need["water"]])
+        if need["water"] in evidence:
+            score += 30
+            passed.append(f"精确命中{need['water']}")
+        elif any(term in evidence for term in family):
+            score += 18
+            passed.append(f"{need['water']}高阶/相近种水")
+        else:
+            score -= 28
+            failed.append(f"未命中{need['water']}种水")
     if need.get("color"):
         family = COLOR_FAMILIES.get(need["color"], [need["color"]])
         if need["color"] in evidence:
@@ -438,7 +569,7 @@ def evaluate_product_rules(product, need):
     else:
         failed.append("缺少证书信息")
     for must in need.get("mustHave") or []:
-        if (must == "证书" and has_certificate) or must in evidence or ("mm" in must and must.replace("mm", "") in evidence):
+        if product_satisfies_must(product, must):
             score += 6
             passed.append(f"满足{must}")
         else:
@@ -516,7 +647,7 @@ def product_satisfies_must(product, must):
     if must == "证书":
         return "证书" in evidence or "复检" in evidence
     if "mm" in must:
-        return must in evidence or must.replace("mm", "") in evidence
+        return product_matches_size(product, must)
     return any(term_matches_product(product, evidence, term) for term in FLAW_FAMILIES.get(must, [must]))
 
 
@@ -540,16 +671,29 @@ def latest_signal_score(product, signal):
                 else:
                     score -= 45
                     reasons.append("本轮颜色不匹配")
+            elif key == "water":
+                family = WATER_FAMILIES.get(value, [value])
+                if term_matches_product(product, evidence, value):
+                    score += 34
+                    reasons.append("本轮种水精确匹配")
+                elif any(term_matches_product(product, evidence, term) for term in family):
+                    score += 24
+                    reasons.append("本轮种水高阶/相近匹配")
+                else:
+                    score -= 42
+                    reasons.append("本轮种水不匹配")
             elif term_matches_product(product, evidence, value):
                 score += points
                 reasons.append(f"本轮{label}匹配")
     if signal.get("budget"):
         budget = signal["budget"]
         distance = abs(product["price"] - budget) / budget
-        limit = budget * (1.12 if signal.get("budgetSoft") else 1)
+        limit = signal.get("budgetLimit") or budget * (1.12 if signal.get("budgetSoft") else 1)
         if product["price"] <= limit:
             score += max(12, round(90 - distance * 180))
-            if distance <= 0.22:
+            if product["price"] > budget and (signal.get("budgetSoft") or signal.get("budgetRelaxed")):
+                reasons.append("本轮预算略超")
+            elif distance <= 0.22:
                 reasons.append("本轮预算贴近")
             elif product["price"] <= budget:
                 reasons.append("本轮预算内但偏低")
@@ -559,7 +703,7 @@ def latest_signal_score(product, signal):
             score -= min(45, round(distance * 70))
             reasons.append("本轮预算偏离")
     for size in signal.get("sizes") or []:
-        if term_matches_product(product, evidence, size) or ("mm" in size and size.replace("mm", "") in evidence):
+        if product_matches_size(product, size):
             score += 16
             reasons.append("本轮尺寸匹配")
     for must in signal.get("mustHave") or []:
@@ -649,6 +793,21 @@ def apply_preference(product, need, candidate_prices, latest_signal=None):
     return updated
 
 
+def budget_priority(product, need):
+    if not need.get("budget"):
+        return 0
+    if product["price"] > budget_limit(need):
+        return -1
+    ratio = product["price"] / need["budget"]
+    if ratio >= 0.8:
+        return 3
+    if ratio >= 0.65:
+        return 2
+    if ratio >= 0.5:
+        return 1
+    return 0
+
+
 def has_latest_sort_signal(signal):
     return bool(signal and (signal.get("price") or signal.get("terms") or signal.get("mustHave") or signal.get("labels") or signal.get("concepts")))
 
@@ -733,7 +892,20 @@ def run_buyer_match_agent(payload):
             "parsedNeed": parsed_need,
         })
 
-        if intent["mode"] not in {"match", "refine"}:
+        budget_too_low = bool(parsed_need.get("budget") and parsed_need["budget"] < 1000)
+        if budget_too_low:
+            intent = {**intent, "mode": "clarify", "reason": "预算金额低于平台翡翠货源范围，需要确认单位"}
+            reply = f"我识别到预算约￥{parsed_need['budget']:,}，这个金额低于当前平台翡翠货源范围。请确认是否少写了单位，例如 5万预算、5000元预算，或给我一个新的预算范围，我再继续匹配。"
+            trace = [
+                {"label": "请求边界校验", "detail": f"消息 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
+                {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
+                {"label": "概念理解 Agent", "detail": concept_summary},
+                {"label": "语义识别 Agent", "detail": f"{'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 预算 ￥{parsed_need['budget']:,} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
+                {"label": "预算校验 Agent", "detail": "已识别明确低预算，停止商品召回并请求用户确认单位"},
+                {"label": "Python Agent状态", "detail": "Python 后端已完成边界识别，本地规则生成澄清回复"},
+            ]
+            result = {"runId": run_id, "sessionId": session_id, "mode": "customer_service", "intent": intent, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": {"documents": []}, "products": [], "trace": trace}
+        elif intent["mode"] not in {"match", "refine"}:
             reply = local_service_reply(need_text, parsed_need, intent)
             trace = [
                 {"label": "请求边界校验", "detail": f"消息 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
@@ -745,6 +917,30 @@ def run_buyer_match_agent(payload):
             result = {"runId": run_id, "sessionId": session_id, "mode": "customer_service", "intent": intent, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": {"documents": []}, "products": [], "trace": trace}
         else:
             inventory = list_products({"publicOnly": True})
+            inventory_boundary = inventory_boundary_check(parsed_need, inventory)
+            if inventory_boundary["blocking"]:
+                intent = {**intent, "mode": "clarify", "reason": "当前库存无法覆盖部分硬约束，需要用户调整条件"}
+                reply = inventory_boundary_reply(inventory_boundary)
+                trace = [
+                    {"label": "请求边界校验", "detail": f"需求 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
+                    {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
+                    {"label": "概念理解 Agent", "detail": concept_summary},
+                    {"label": "语义识别 Agent", "detail": f"{parsed_need.get('category') or '未限定品类'} / {('￥' + format(parsed_need['budget'], ',')) if parsed_need.get('budget') else '未限定预算'} / {'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
+                    {"label": "库存边界 Agent", "detail": "；".join(blocker["detail"] for blocker in inventory_boundary["blockers"])},
+                    {"label": "Python Agent状态", "detail": "Python 后端已完成库存边界校验，未进入商品排序"},
+                ]
+                result = {"runId": run_id, "sessionId": session_id, "mode": "customer_service", "intent": intent, "latestSignal": latest_signal, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": {"documents": []}, "products": [], "trace": trace, "inventoryBoundary": inventory_boundary}
+                add_message(session_id, "assistant", result["reply"], result)
+                update_session_state(session_id, {**session_state, "lastMode": result["mode"], "lastIntent": intent, "lastNeed": need_text, "lastParsedNeed": session_state.get("lastParsedNeed"), "lastProductIds": []})
+                record_agent_run({"id": run_id, "sessionId": session_id, "agentType": "buyer_match", "input": {"need": need_text, "buyerEmail": buyer_email}, "output": {"mode": result["mode"], "intent": intent, "reply": result["reply"], "parsedNeed": parsed_need, "validation": validation, "retrieval": result["retrieval"], "inventoryBoundary": inventory_boundary, "productIds": []}, "trace": result["trace"], "status": "completed"})
+                return result
+            parsed_need, relaxed_budget_product = apply_budget_relaxation(parsed_need, inventory)
+            if relaxed_budget_product:
+                latest_signal = {
+                    **latest_signal,
+                    "budgetLimit": parsed_need["budgetLimit"],
+                    "budgetRelaxed": True,
+                }
             retrieval_terms = expand_need_terms(parsed_need)
             retrieval_docs = search_product_documents(query=need_text, terms=retrieval_terms, category=parsed_need.get("category"), limit=18)
             retrieval_by_product = {doc["productId"]: doc for doc in retrieval_docs}
@@ -821,6 +1017,8 @@ def run_buyer_match_agent(payload):
                 products = sorted(scored_products, key=lambda product: (product["price"], product["matchScore"]), reverse=True)[:3]
             elif (latest_signal.get("price") or "") == "lowest":
                 products = sorted(scored_products, key=lambda product: (product["price"], -product["matchScore"]))[:3]
+            elif parsed_need.get("budget"):
+                products = sorted(scored_products, key=lambda product: (budget_priority(product, parsed_need), product["matchScore"]), reverse=True)[:3]
             elif has_latest_sort_signal(latest_signal):
                 products = sorted(scored_products, key=lambda product: (product["agentScore"].get("preference", 0), product["matchScore"]), reverse=True)[:3]
             else:
@@ -862,22 +1060,145 @@ def run_buyer_match_agent(payload):
         raise
 
 
-def local_draft(hint, images):
-    is_pendant = "吊坠" in hint
+def upload_analysis_for(image):
+    if not isinstance(image, str) or not image.startswith("/uploads/"):
+        return {}
+    meta_path = UPLOAD_DIR / f"{Path(image).name}.meta.json"
+    if not meta_path.exists():
+        return {}
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def merged_upload_analyses(images, supplied):
+    supplied = supplied if isinstance(supplied, list) else []
+    analyses = []
+    for index, image in enumerate(images):
+        merged = {**upload_analysis_for(image)}
+        if index < len(supplied) and isinstance(supplied[index], dict):
+            merged.update(supplied[index])
+        merged["url"] = image
+        analyses.append(merged)
+    return analyses
+
+
+def dominant_upload_signal(analyses):
+    scored = sorted(analyses, key=lambda item: float(item.get("jadeScore") or 0), reverse=True)
+    return scored[0] if scored else {}
+
+
+def publish_size_from_hint(need):
+    return need.get("sizes", [""])[0] if need.get("sizes") else ""
+
+
+def estimated_publish_price(category, water, color):
+    base = {
+        "手镯": 26000,
+        "吊坠": 12800,
+        "项链": 36000,
+        "戒面": 16000,
+        "平安扣": 9000,
+        "珠链": 42000,
+        "手链": 18000,
+        "手串": 22000,
+        "无事牌": 24000,
+    }.get(category, 15000)
+    water_factor = {"豆种": 0.5, "糯种": 0.72, "糯冰": 0.9, "冰糯": 0.92, "冰种": 1.25, "高冰": 1.65, "玻璃种": 2.2}.get(water, 1)
+    color_factor = {"帝王绿": 3.0, "正阳绿": 2.25, "阳绿": 1.9, "满绿": 2.1, "飘绿": 1.25, "晴底": 1.05, "蓝水": 1.18, "白冰": 1.1, "紫罗兰": 1.22, "墨翠": 1.35}.get(color, 1)
+    return max(800, round(base * water_factor * color_factor / 100) * 100)
+
+
+def publish_image_understanding(hint, images, supplied_analyses):
+    analyses = merged_upload_analyses(images, supplied_analyses)
+    if not analyses:
+        raise ValidationError("Invalid publish request", [{"field": "images", "message": "请先上传翡翠商品图片"}])
+    main = dominant_upload_signal(analyses)
+    jade_score = max(float(item.get("jadeScore") or 0) for item in analyses)
+    if not any(item.get("isJadeLike") for item in analyses) and jade_score < 24:
+        raise ValidationError("Invalid publish image", [{"field": "images", "message": "图片未通过翡翠商品校验，请上传清晰的翡翠商品照片"}])
+    need = heuristic_need(hint) if hint else {}
+    category = need.get("category") or main.get("categoryGuess") or "手镯"
+    if category not in SEMANTIC_CATALOG["categories"]:
+        category = "手镯"
+    water = need.get("water") or main.get("waterGuess") or "种水待复核"
+    color = need.get("color") or main.get("dominantTone") or "颜色待复核"
+    shape = need.get("shape") or main.get("shapeGuess") or ""
+    size = publish_size_from_hint(need)
+    flaw = extract_first(hint, SEMANTIC_CATALOG["flawTerms"]) if hint else ""
+    scenes = [scene for scene in SEMANTIC_CATALOG["scenes"] if scene in hint]
+    confidence = min(98, max(55, round(jade_score)))
     return {
-        "title": "冰种飘绿翡翠吊坠" if is_pendant else "冰种晴底翡翠手镯",
-        "category": "吊坠" if is_pendant else "手镯",
-        "price": 32000 if is_pendant else 48000,
-        "originPrice": 36000 if is_pendant else 52000,
-        "diameter": "32x18mm" if is_pendant else "55mm",
-        "quality": "冰种飘绿" if is_pendant else "冰种晴底",
-        "intro": "冰透起光，飘绿灵动，适合日常佩戴与礼赠。" if is_pendant else "冰种晴底，质地细腻通透，清新淡雅，佩戴显气质。",
-        "detail": "这件冰种飘绿翡翠吊坠整体水润清透，绿色自然灵动，配18K扣头。尺寸适中，上身轻盈，适合日常佩戴、节日礼赠或作为入门收藏。" if is_pendant else "本款冰种晴底翡翠手镯，种水达到冰种级别，底地细腻，通透如冰，底色清爽淡雅。手镯为正圈设计，圈口55mm，佩戴舒适贴合。无纹裂，结构稳定，适合日常佩戴或收藏。",
-        "tags": ["冰种", "飘绿", "吊坠", "18K扣", "无纹裂", "天然A货"] if is_pendant else ["冰种", "晴底色", "翡翠手镯", "正圈", "55圈口", "无纹裂", "天然A货", "送礼佳品"],
+        "category": category,
+        "water": water,
+        "color": color,
+        "shape": shape,
+        "size": size,
+        "flaw": flaw or "以实物复核为准",
+        "scene": "/".join(scenes) or "日常佩戴",
+        "price": estimated_publish_price(category, water, color),
+        "confidence": confidence,
+        "analyses": analyses,
+        "isJade": True,
+    }
+
+
+def local_draft(hint, images, image_analyses=None):
+    vision = publish_image_understanding(hint, images, image_analyses)
+    title_parts = [vision["water"], vision["color"], "翡翠", vision["category"]]
+    title = "".join([part for part in title_parts if part and "待复核" not in part])
+    if not title:
+        title = f"翡翠{vision['category']}"
+    quality = "".join([part for part in [vision["water"], vision["color"]] if "待复核" not in part]) or "实物质感待复核"
+    size_text = f"，尺寸约{vision['size']}" if vision["size"] else "，尺寸需商家复核"
+    shape_text = f"，{vision['shape']}造型" if vision["shape"] else ""
+    flaw_text = vision["flaw"] if vision["flaw"] != "以实物复核为准" else "瑕疵以实物复核为准"
+    tags = compact([
+        vision["water"] if "待复核" not in vision["water"] else "",
+        vision["color"] if "待复核" not in vision["color"] else "",
+        vision["category"],
+        vision["shape"],
+        vision["size"],
+        vision["flaw"] if vision["flaw"] != "以实物复核为准" else "",
+        "天然A货",
+        "支持复检",
+        vision["scene"],
+    ])[:10]
+    return {
+        "title": title[:18],
+        "category": vision["category"],
+        "price": vision["price"],
+        "originPrice": round(vision["price"] * 1.08 / 100) * 100,
+        "diameter": vision["size"],
+        "quality": quality,
+        "material": "翡翠",
+        "jadeiteType": vision["water"],
+        "color": vision["color"],
+        "water": vision["water"],
+        "shape": vision["shape"],
+        "size": vision["size"],
+        "certificate": "支持复检",
+        "flaws": vision["flaw"],
+        "treatment": "天然A货",
+        "scene": vision["scene"],
+        "intro": f"{quality}，图片识别为{vision['category']}，清爽耐看，适合{vision['scene']}。",
+        "detail": f"根据上传图片识别，这件商品主体为翡翠{vision['category']}，呈现{vision['water']}与{vision['color']}特征{shape_text}{size_text}。{flaw_text}，证书与天然属性建议由商家发布前复核确认。",
+        "tags": tags,
         "images": images,
-        "agentNotes": ["识别主体", "生成卖点", "提取标签", "估算价格", "发布合规检查"],
-        "checks": ["标题含品类和核心种水", "详情覆盖种水、颜色、圈口、瑕疵和适用场景", "标签满足买家检索和推荐排序", "价格与同类商品区间一致"],
-        "confidence": 0.86,
+        "merchantNotes": "AI已基于商家上传图片生成，发布前请复核尺寸、瑕疵、证书和价格。",
+        "agentNotes": ["翡翠图片校验", "图像字段识别", "商品文案生成", "价格区间估算", "发布合规检查"],
+        "checks": ["已确认存在商家上传图片", f"图片校验置信度 {vision['confidence']}%", "标题含品类和图像识别字段", "未从图片凭空生成圈口尺寸"],
+        "confidence": round(vision["confidence"] / 100, 2),
+        "vision": {
+            "isJade": vision["isJade"],
+            "confidence": vision["confidence"],
+            "imageCount": len(images),
+            "category": vision["category"],
+            "water": vision["water"],
+            "color": vision["color"],
+            "shape": vision["shape"],
+        },
     }
 
 
@@ -886,7 +1207,8 @@ def run_publish_agent(payload):
     seller_id = payload["sellerId"]
     hint = str(payload.get("hint") or payload.get("notes") or "")
     images = payload.get("images") if isinstance(payload.get("images"), list) else []
-    draft = {**local_draft(hint, images), "sellerId": seller_id, "provider": "python-rule"}
+    image_analyses = payload.get("imageAnalyses") if isinstance(payload.get("imageAnalyses"), list) else []
+    draft = {**local_draft(hint, images, image_analyses), "sellerId": seller_id, "provider": "python-vision-rule"}
     trace = [{"label": "Agent状态", "detail": "Python 发布 Agent 已完成"}, *[{"label": note, "detail": "本地规则 agent 已完成"} for note in draft["agentNotes"]]]
     record_agent_run({"id": run_id, "agentType": "merchant_publish", "input": {"sellerId": seller_id, "hint": hint, "images": images}, "output": draft, "trace": trace, "status": "completed"})
     return {**draft, "runId": run_id}
