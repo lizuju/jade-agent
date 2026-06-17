@@ -5,8 +5,18 @@ from urllib import request
 import json
 import os
 import base64
+import warnings
 from pathlib import Path
+from typing import TypedDict, Any
 
+warnings.filterwarnings("ignore", message=".*allowed_objects.*")
+try:
+    from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+    warnings.filterwarnings("ignore", category=LangChainPendingDeprecationWarning)
+except Exception:
+    pass
+
+from langgraph.graph import END, START, StateGraph
 from .db import (
     add_message,
     create_lead,
@@ -864,198 +874,312 @@ def write_buyer_reply(need, matches, retrieval_docs, latest_signal):
     return f"{prefix}。当前需求为：{buyer_need_summary(need)}。我召回了 {len(retrieval_docs)} 条商品证据，优先推荐「{top['title']}」（￥{top['price']:,}），依据是：{reasons}。"
 
 
+class AgentGraphState(TypedDict, total=False):
+    payload: dict[str, Any]
+    run_id: str
+    session_id: str
+    need_text: str
+    buyer_email: str | None
+    seller_id: int
+    lead_id: str
+    hint: str
+    images: list[str]
+    image_analyses: list[dict[str, Any]]
+    session_state: dict[str, Any]
+    current_need: dict[str, Any]
+    parsed_need: dict[str, Any]
+    intent: dict[str, Any]
+    latest_signal: dict[str, Any]
+    validation: dict[str, Any]
+    concept_summary: str
+    route: str
+    result: dict[str, Any]
+    lead: dict[str, Any]
+    output: dict[str, Any]
+
+
+def buyer_prepare_node(state):
+    session_id = state["session_id"]
+    need_text = state["need_text"]
+    buyer_email = state.get("buyer_email")
+    session = get_or_create_session(session_id, "buyer_match", buyer_email)
+    session_state = get_session_state(session)
+    add_message(session_id, "user", need_text)
+    understanding = understand_query_concepts(need_text)
+    current_need = heuristic_need(need_text, understanding)
+    previous_need = session_state.get("lastParsedNeed")
+    intent = classify_buyer_intent(need_text, current_need, previous_need, understanding)
+    parsed_need = merge_parsed_need(previous_need, current_need, intent)
+    latest_signal = build_latest_signal(need_text, current_need, intent)
+    validation = validate_need_rules(parsed_need)
+    concept_summary = "、".join(
+        f"{concept['label']}({'/'.join((concept.get('matched') or [])[:2])})"
+        for concept in latest_signal.get("concepts", [])[:5]
+    ) or "未命中概念词库"
+    record_query_understanding_event({
+        "sessionId": session_id,
+        "rawText": need_text,
+        "mode": intent["mode"],
+        "confidence": max(current_need.get("confidence") or 0, (parsed_need.get("preferenceProfile") or {}).get("conceptConfidence") or 0),
+        "signals": latest_signal.get("concepts", []),
+        "parsedNeed": parsed_need,
+    })
+    if parsed_need.get("budget") and parsed_need["budget"] < 1000:
+        route = "budget_clarify"
+    elif intent["mode"] not in {"match", "refine"}:
+        route = "customer_service"
+    else:
+        route = "match"
+    return {
+        "session_state": session_state,
+        "current_need": current_need,
+        "parsed_need": parsed_need,
+        "intent": intent,
+        "latest_signal": latest_signal,
+        "validation": validation,
+        "concept_summary": concept_summary,
+        "route": route,
+    }
+
+
+def buyer_route(state):
+    return state["route"]
+
+
+def buyer_budget_clarify_node(state):
+    need_text = state["need_text"]
+    buyer_email = state.get("buyer_email")
+    parsed_need = state["parsed_need"]
+    validation = state["validation"]
+    concept_summary = state["concept_summary"]
+    intent = {**state["intent"], "mode": "clarify", "reason": "预算金额低于平台翡翠货源范围，需要确认单位"}
+    reply = f"我识别到预算约￥{parsed_need['budget']:,}，这个金额低于当前平台翡翠货源范围。请确认是否少写了单位，例如 5万预算、5000元预算，或给我一个新的预算范围，我再继续匹配。"
+    trace = [
+        {"label": "请求边界校验", "detail": f"消息 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
+        {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
+        {"label": "概念理解 Agent", "detail": concept_summary},
+        {"label": "语义识别 Agent", "detail": f"{'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 预算 ￥{parsed_need['budget']:,} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
+        {"label": "预算校验 Agent", "detail": "已识别明确低预算，停止商品召回并请求用户确认单位"},
+        {"label": "LangGraph状态", "detail": "LangGraph buyer_match 已完成边界识别"},
+    ]
+    return {"intent": intent, "result": {"runId": state["run_id"], "sessionId": state["session_id"], "mode": "customer_service", "intent": intent, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": {"documents": []}, "products": [], "trace": trace}}
+
+
+def buyer_customer_service_node(state):
+    need_text = state["need_text"]
+    buyer_email = state.get("buyer_email")
+    parsed_need = state["parsed_need"]
+    intent = state["intent"]
+    reply = local_service_reply(need_text, parsed_need, intent)
+    trace = [
+        {"label": "请求边界校验", "detail": f"消息 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
+        {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
+        {"label": "概念理解 Agent", "detail": state["concept_summary"]},
+        {"label": "语义识别 Agent", "detail": f"{'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
+        {"label": "LangGraph状态", "detail": "LangGraph buyer_match 已路由到客服回复节点"},
+    ]
+    return {"result": {"runId": state["run_id"], "sessionId": state["session_id"], "mode": "customer_service", "intent": intent, "reply": reply, "parsedNeed": parsed_need, "validation": state["validation"], "retrieval": {"documents": []}, "products": [], "trace": trace}}
+
+
+def buyer_match_node(state):
+    need_text = state["need_text"]
+    buyer_email = state.get("buyer_email")
+    parsed_need = state["parsed_need"]
+    latest_signal = state["latest_signal"]
+    intent = state["intent"]
+    validation = state["validation"]
+    concept_summary = state["concept_summary"]
+    inventory = list_products({"publicOnly": True})
+    inventory_boundary = inventory_boundary_check(parsed_need, inventory)
+    if inventory_boundary["blocking"]:
+        intent = {**intent, "mode": "clarify", "reason": "当前库存无法覆盖部分硬约束，需要用户调整条件"}
+        reply = inventory_boundary_reply(inventory_boundary)
+        trace = [
+            {"label": "请求边界校验", "detail": f"需求 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
+            {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
+            {"label": "概念理解 Agent", "detail": concept_summary},
+            {"label": "语义识别 Agent", "detail": f"{parsed_need.get('category') or '未限定品类'} / {('￥' + format(parsed_need['budget'], ',')) if parsed_need.get('budget') else '未限定预算'} / {'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
+            {"label": "库存边界 Agent", "detail": "；".join(blocker["detail"] for blocker in inventory_boundary["blockers"])},
+            {"label": "LangGraph状态", "detail": "LangGraph buyer_match 已完成库存边界校验，未进入商品排序"},
+        ]
+        return {"intent": intent, "result": {"runId": state["run_id"], "sessionId": state["session_id"], "mode": "customer_service", "intent": intent, "latestSignal": latest_signal, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": {"documents": []}, "products": [], "trace": trace, "inventoryBoundary": inventory_boundary}}
+    parsed_need, relaxed_budget_product = apply_budget_relaxation(parsed_need, inventory)
+    if relaxed_budget_product:
+        latest_signal = {**latest_signal, "budgetLimit": parsed_need["budgetLimit"], "budgetRelaxed": True}
+    retrieval_terms = expand_need_terms(parsed_need)
+    retrieval_docs = search_product_documents(query=need_text, terms=retrieval_terms, category=parsed_need.get("category"), limit=18)
+    retrieval_by_product = {doc["productId"]: doc for doc in retrieval_docs}
+    preference_only = has_actionable_preference(parsed_need.get("preferenceProfile")) and not has_product_constraint(parsed_need)
+    candidate_ids = {doc["productId"] for doc in retrieval_docs} if retrieval_docs and not preference_only else {product["id"] for product in inventory}
+    if parsed_need.get("budget"):
+        price_limit = budget_limit(parsed_need)
+        budget_candidates = sorted(
+            [product for product in inventory if (not parsed_need.get("category") or product["category"] == parsed_need["category"]) and product["price"] <= price_limit],
+            key=lambda product: abs(product["price"] - parsed_need["budget"]),
+        )[:8]
+        candidate_ids.update(product["id"] for product in budget_candidates)
+    if parsed_need.get("color"):
+        color_family = COLOR_FAMILIES.get(parsed_need["color"], [parsed_need["color"]])
+        color_candidates = sorted(
+            [
+                product for product in inventory
+                if (not parsed_need.get("category") or product["category"] == parsed_need["category"])
+                and (not parsed_need.get("budget") or product["price"] <= budget_limit(parsed_need))
+                and any(term_matches_product(product, product_evidence_text(product), term) for term in color_family)
+            ],
+            key=lambda product: abs(product["price"] - parsed_need["budget"]) if parsed_need.get("budget") else -product["price"],
+        )[:14]
+        candidate_ids.update(product["id"] for product in color_candidates)
+    price_prefer = latest_signal.get("price") or (parsed_need.get("preferenceProfile") or {}).get("price") or parsed_need.get("pricePreference")
+    if price_prefer in {"premium", "lowest", "mid"}:
+        price_pool = [
+            product for product in inventory
+            if (not parsed_need.get("category") or product["category"] == parsed_need["category"])
+            and (not parsed_need.get("budget") or product["price"] <= budget_limit(parsed_need))
+        ]
+        if price_prefer == "mid":
+            pool_prices = sorted(product["price"] for product in price_pool)
+            median_price = pool_prices[len(pool_prices) // 2] if pool_prices else 0
+            price_candidates = sorted(price_pool, key=lambda product: abs(product["price"] - median_price))[:14]
+        else:
+            price_candidates = sorted(price_pool, key=lambda product: product["price"], reverse=price_prefer == "premium")[:10]
+        candidate_ids.update(product["id"] for product in price_candidates)
+    high_budget_floor = parsed_need["budget"] * 0.45 if parsed_need.get("budget") and parsed_need["budget"] >= 80000 else 0
+    color_matched_ids = set()
+    if parsed_need.get("color"):
+        color_family = COLOR_FAMILIES.get(parsed_need["color"], [parsed_need["color"]])
+        color_matched_ids = {
+            product["id"] for product in inventory
+            if (not parsed_need.get("category") or product["category"] == parsed_need["category"])
+            and (not parsed_need.get("budget") or product["price"] <= budget_limit(parsed_need))
+            and any(term_matches_product(product, product_evidence_text(product), term) for term in color_family)
+        }
+    candidates = []
+    for product in inventory:
+        if product["id"] not in candidate_ids:
+            continue
+        if parsed_need.get("category") and product["category"] != parsed_need["category"]:
+            continue
+        if parsed_need.get("budget") and product["price"] > budget_limit(parsed_need):
+            continue
+        if color_matched_ids and product["id"] not in color_matched_ids:
+            continue
+        if high_budget_floor and product["price"] < high_budget_floor:
+            evidence = f"{product['title']} {product.get('color')} {' '.join(product['tags'])} {product.get('ragText')}"
+            if not parsed_need.get("color") or parsed_need["color"] not in evidence:
+                continue
+        candidates.append(product)
+    if parsed_need.get("mustHave"):
+        must_matched = [product for product in candidates if all(product_satisfies_must(product, must) for must in parsed_need["mustHave"])]
+        if must_matched:
+            candidates = must_matched
+    candidate_prices = [product["price"] for product in candidates]
+    scored_products = [apply_preference(score_product(product, parsed_need, retrieval_by_product.get(product["id"])), parsed_need, candidate_prices, latest_signal) for product in candidates]
+    if (latest_signal.get("price") or "") == "premium":
+        products = sorted(scored_products, key=lambda product: (product["price"], product["matchScore"]), reverse=True)[:3]
+    elif (latest_signal.get("price") or "") == "lowest":
+        products = sorted(scored_products, key=lambda product: (product["price"], -product["matchScore"]))[:3]
+    elif parsed_need.get("budget"):
+        products = sorted(scored_products, key=lambda product: (budget_priority(product, parsed_need), product["matchScore"]), reverse=True)[:3]
+    elif has_latest_sort_signal(latest_signal):
+        products = sorted(scored_products, key=lambda product: (product["agentScore"].get("preference", 0), product["matchScore"]), reverse=True)[:3]
+    else:
+        products = sorted(scored_products, key=lambda product: product["matchScore"], reverse=True)[:3]
+    if buyer_email:
+        for product in products:
+            if product["status"] == "listed":
+                create_lead({"productId": product["id"], "buyerEmail": buyer_email, "buyerNeed": need_text, "source": "buyer_agent"})
+    reply = write_buyer_reply(parsed_need, products, retrieval_docs, latest_signal)
+    trace = [
+        {"label": "请求边界校验", "detail": f"需求 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
+        {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
+        {"label": "概念理解 Agent", "detail": concept_summary},
+        {"label": "本轮信号 Agent", "detail": "、".join(compact([latest_signal.get("price"), latest_signal.get("category"), f"￥{latest_signal['budget']:,}" if latest_signal.get("budget") else "", latest_signal.get("water"), latest_signal.get("color"), *(latest_signal.get("mustHave") or []), *(latest_signal.get("labels") or [])])) or latest_signal.get("rawText") or "无"},
+        {"label": "语义识别 Agent", "detail": f"{parsed_need.get('category') or '未限定品类'} / {('￥' + format(parsed_need['budget'], ',')) if parsed_need.get('budget') else '未限定预算'} / {'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
+        {"label": "LangGraph状态", "detail": "LangGraph buyer_match 完成意图识别、RAG召回、规则排序和解释生成"},
+        {"label": "规则校验 Agent", "detail": f"{'；'.join(validation['passed']) or '基础规则通过'}{('；提醒：' + '；'.join(validation['warnings'])) if validation['warnings'] else ''}"},
+        {"label": "RAG检索 Tool", "detail": f"查询 product_documents，召回 {len(retrieval_docs)} 条证据；命中词：{'、'.join((retrieval_docs[0]['matchedTerms'] if retrieval_docs else [])[:5]) or '无'}；候选池 {len(candidates)} 件"},
+        {"label": "排序 Agent", "detail": f"{products[0]['title']}：总分 {products[0]['agentScore']['total']} = 语义 {products[0]['agentScore']['semantic']} + 规则 {products[0]['agentScore']['rules']} + RAG {products[0]['agentScore']['rag']} + 本轮 {products[0]['agentScore'].get('preference', 0)}" if products else "暂无候选"},
+        {"label": "解释 Agent", "detail": "、".join(products[0]["matchReasons"]) if products else "需要更多需求信息"},
+        {"label": "客资分发 Tool", "detail": "已写入商家客资列表" if buyer_email else "未留邮箱，仅展示匹配结果"},
+    ]
+    retrieval = {"documents": [{
+        "productId": doc["productId"],
+        "productTitle": doc["product"]["title"],
+        "score": doc["score"],
+        "matchedTerms": doc["matchedTerms"],
+        "snippet": doc["snippet"],
+    } for doc in retrieval_docs[:6]]}
+    return {"parsed_need": parsed_need, "latest_signal": latest_signal, "result": {"runId": state["run_id"], "sessionId": state["session_id"], "mode": "match", "intent": intent, "latestSignal": latest_signal, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": retrieval, "products": products, "trace": trace}}
+
+
+def buyer_persist_node(state):
+    result = state["result"]
+    session_id = state["session_id"]
+    parsed_need = state["parsed_need"]
+    session_state = state["session_state"]
+    add_message(session_id, "assistant", result["reply"], result)
+    update_session_state(session_id, {
+        **session_state,
+        "lastMode": result["mode"],
+        "lastIntent": result["intent"],
+        "lastNeed": state["need_text"],
+        "lastParsedNeed": parsed_need if result["mode"] == "match" else session_state.get("lastParsedNeed"),
+        "lastProductIds": [p["id"] for p in result["products"]],
+    })
+    record_agent_run({
+        "id": state["run_id"],
+        "sessionId": session_id,
+        "agentType": "buyer_match",
+        "input": {"need": state["need_text"], "buyerEmail": state.get("buyer_email")},
+        "output": {"mode": result["mode"], "intent": result["intent"], "reply": result["reply"], "parsedNeed": parsed_need, "validation": state["validation"], "retrieval": result["retrieval"], "productIds": [p["id"] for p in result["products"]]},
+        "trace": result["trace"],
+        "status": "completed",
+    })
+    return {"result": result}
+
+
+def build_buyer_match_graph():
+    graph = StateGraph(AgentGraphState)
+    graph.add_node("prepare_context", buyer_prepare_node)
+    graph.add_node("budget_clarify", buyer_budget_clarify_node)
+    graph.add_node("customer_service", buyer_customer_service_node)
+    graph.add_node("match_products", buyer_match_node)
+    graph.add_node("persist_run", buyer_persist_node)
+    graph.add_edge(START, "prepare_context")
+    graph.add_conditional_edges(
+        "prepare_context",
+        buyer_route,
+        {
+            "budget_clarify": "budget_clarify",
+            "customer_service": "customer_service",
+            "match": "match_products",
+        },
+    )
+    graph.add_edge("budget_clarify", "persist_run")
+    graph.add_edge("customer_service", "persist_run")
+    graph.add_edge("match_products", "persist_run")
+    graph.add_edge("persist_run", END)
+    return graph.compile()
+
+
+BUYER_MATCH_GRAPH = build_buyer_match_graph()
+
+
 def run_buyer_match_agent(payload):
     run_id = str(uuid.uuid4())
     session_id = payload.get("sessionId") or str(uuid.uuid4())
     need_text = payload["need"]
     buyer_email = payload.get("buyerEmail")
     try:
-        session = get_or_create_session(session_id, "buyer_match", buyer_email)
-        session_state = get_session_state(session)
-        add_message(session_id, "user", need_text)
-
-        understanding = understand_query_concepts(need_text)
-        current_need = heuristic_need(need_text, understanding)
-        previous_need = session_state.get("lastParsedNeed")
-        intent = classify_buyer_intent(need_text, current_need, previous_need, understanding)
-        parsed_need = merge_parsed_need(previous_need, current_need, intent)
-        latest_signal = build_latest_signal(need_text, current_need, intent)
-        validation = validate_need_rules(parsed_need)
-        concept_summary = "、".join(
-            f"{concept['label']}({'/'.join((concept.get('matched') or [])[:2])})"
-            for concept in latest_signal.get("concepts", [])[:5]
-        ) or "未命中概念词库"
-        record_query_understanding_event({
-            "sessionId": session_id,
-            "rawText": need_text,
-            "mode": intent["mode"],
-            "confidence": max(current_need.get("confidence") or 0, (parsed_need.get("preferenceProfile") or {}).get("conceptConfidence") or 0),
-            "signals": latest_signal.get("concepts", []),
-            "parsedNeed": parsed_need,
+        state = BUYER_MATCH_GRAPH.invoke({
+            "payload": payload,
+            "run_id": run_id,
+            "session_id": session_id,
+            "need_text": need_text,
+            "buyer_email": buyer_email,
         })
-
-        budget_too_low = bool(parsed_need.get("budget") and parsed_need["budget"] < 1000)
-        if budget_too_low:
-            intent = {**intent, "mode": "clarify", "reason": "预算金额低于平台翡翠货源范围，需要确认单位"}
-            reply = f"我识别到预算约￥{parsed_need['budget']:,}，这个金额低于当前平台翡翠货源范围。请确认是否少写了单位，例如 5万预算、5000元预算，或给我一个新的预算范围，我再继续匹配。"
-            trace = [
-                {"label": "请求边界校验", "detail": f"消息 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
-                {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
-                {"label": "概念理解 Agent", "detail": concept_summary},
-                {"label": "语义识别 Agent", "detail": f"{'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 预算 ￥{parsed_need['budget']:,} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
-                {"label": "预算校验 Agent", "detail": "已识别明确低预算，停止商品召回并请求用户确认单位"},
-                {"label": "Python Agent状态", "detail": "Python 后端已完成边界识别，本地规则生成澄清回复"},
-            ]
-            result = {"runId": run_id, "sessionId": session_id, "mode": "customer_service", "intent": intent, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": {"documents": []}, "products": [], "trace": trace}
-        elif intent["mode"] not in {"match", "refine"}:
-            reply = local_service_reply(need_text, parsed_need, intent)
-            trace = [
-                {"label": "请求边界校验", "detail": f"消息 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
-                {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
-                {"label": "概念理解 Agent", "detail": concept_summary},
-                {"label": "语义识别 Agent", "detail": f"{'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
-                {"label": "Python Agent状态", "detail": "Python 后端已完成意图识别，本地规则生成客服回复"},
-            ]
-            result = {"runId": run_id, "sessionId": session_id, "mode": "customer_service", "intent": intent, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": {"documents": []}, "products": [], "trace": trace}
-        else:
-            inventory = list_products({"publicOnly": True})
-            inventory_boundary = inventory_boundary_check(parsed_need, inventory)
-            if inventory_boundary["blocking"]:
-                intent = {**intent, "mode": "clarify", "reason": "当前库存无法覆盖部分硬约束，需要用户调整条件"}
-                reply = inventory_boundary_reply(inventory_boundary)
-                trace = [
-                    {"label": "请求边界校验", "detail": f"需求 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
-                    {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
-                    {"label": "概念理解 Agent", "detail": concept_summary},
-                    {"label": "语义识别 Agent", "detail": f"{parsed_need.get('category') or '未限定品类'} / {('￥' + format(parsed_need['budget'], ',')) if parsed_need.get('budget') else '未限定预算'} / {'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
-                    {"label": "库存边界 Agent", "detail": "；".join(blocker["detail"] for blocker in inventory_boundary["blockers"])},
-                    {"label": "Python Agent状态", "detail": "Python 后端已完成库存边界校验，未进入商品排序"},
-                ]
-                result = {"runId": run_id, "sessionId": session_id, "mode": "customer_service", "intent": intent, "latestSignal": latest_signal, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": {"documents": []}, "products": [], "trace": trace, "inventoryBoundary": inventory_boundary}
-                add_message(session_id, "assistant", result["reply"], result)
-                update_session_state(session_id, {**session_state, "lastMode": result["mode"], "lastIntent": intent, "lastNeed": need_text, "lastParsedNeed": session_state.get("lastParsedNeed"), "lastProductIds": []})
-                record_agent_run({"id": run_id, "sessionId": session_id, "agentType": "buyer_match", "input": {"need": need_text, "buyerEmail": buyer_email}, "output": {"mode": result["mode"], "intent": intent, "reply": result["reply"], "parsedNeed": parsed_need, "validation": validation, "retrieval": result["retrieval"], "inventoryBoundary": inventory_boundary, "productIds": []}, "trace": result["trace"], "status": "completed"})
-                return result
-            parsed_need, relaxed_budget_product = apply_budget_relaxation(parsed_need, inventory)
-            if relaxed_budget_product:
-                latest_signal = {
-                    **latest_signal,
-                    "budgetLimit": parsed_need["budgetLimit"],
-                    "budgetRelaxed": True,
-                }
-            retrieval_terms = expand_need_terms(parsed_need)
-            retrieval_docs = search_product_documents(query=need_text, terms=retrieval_terms, category=parsed_need.get("category"), limit=18)
-            retrieval_by_product = {doc["productId"]: doc for doc in retrieval_docs}
-            preference_only = has_actionable_preference(parsed_need.get("preferenceProfile")) and not has_product_constraint(parsed_need)
-            if retrieval_docs and not preference_only:
-                candidate_ids = {doc["productId"] for doc in retrieval_docs}
-            else:
-                candidate_ids = {product["id"] for product in inventory}
-            if parsed_need.get("budget"):
-                price_limit = budget_limit(parsed_need)
-                budget_candidates = sorted(
-                    [product for product in inventory if (not parsed_need.get("category") or product["category"] == parsed_need["category"]) and product["price"] <= price_limit],
-                    key=lambda product: abs(product["price"] - parsed_need["budget"]),
-                )[:8]
-                candidate_ids.update(product["id"] for product in budget_candidates)
-            if parsed_need.get("color"):
-                color_family = COLOR_FAMILIES.get(parsed_need["color"], [parsed_need["color"]])
-                color_candidates = sorted(
-                    [
-                        product for product in inventory
-                        if (not parsed_need.get("category") or product["category"] == parsed_need["category"])
-                        and (not parsed_need.get("budget") or product["price"] <= budget_limit(parsed_need))
-                        and any(term_matches_product(product, product_evidence_text(product), term) for term in color_family)
-                    ],
-                    key=lambda product: abs(product["price"] - parsed_need["budget"]) if parsed_need.get("budget") else -product["price"],
-                )[:14]
-                candidate_ids.update(product["id"] for product in color_candidates)
-            price_prefer = latest_signal.get("price") or (parsed_need.get("preferenceProfile") or {}).get("price") or parsed_need.get("pricePreference")
-            if price_prefer in {"premium", "lowest", "mid"}:
-                price_pool = [
-                    product for product in inventory
-                    if (not parsed_need.get("category") or product["category"] == parsed_need["category"])
-                    and (not parsed_need.get("budget") or product["price"] <= budget_limit(parsed_need))
-                ]
-                if price_prefer == "mid":
-                    pool_prices = sorted(product["price"] for product in price_pool)
-                    median_price = pool_prices[len(pool_prices) // 2] if pool_prices else 0
-                    price_candidates = sorted(price_pool, key=lambda product: abs(product["price"] - median_price))[:14]
-                else:
-                    price_candidates = sorted(price_pool, key=lambda product: product["price"], reverse=price_prefer == "premium")[:10]
-                candidate_ids.update(product["id"] for product in price_candidates)
-            high_budget_floor = parsed_need["budget"] * 0.45 if parsed_need.get("budget") and parsed_need["budget"] >= 80000 else 0
-            color_matched_ids = set()
-            if parsed_need.get("color"):
-                color_family = COLOR_FAMILIES.get(parsed_need["color"], [parsed_need["color"]])
-                color_matched_ids = {
-                    product["id"] for product in inventory
-                    if (not parsed_need.get("category") or product["category"] == parsed_need["category"])
-                    and (not parsed_need.get("budget") or product["price"] <= budget_limit(parsed_need))
-                    and any(term_matches_product(product, product_evidence_text(product), term) for term in color_family)
-                }
-            candidates = []
-            for product in inventory:
-                if product["id"] not in candidate_ids:
-                    continue
-                if parsed_need.get("category") and product["category"] != parsed_need["category"]:
-                    continue
-                if parsed_need.get("budget") and product["price"] > budget_limit(parsed_need):
-                    continue
-                if color_matched_ids and product["id"] not in color_matched_ids:
-                    continue
-                if high_budget_floor and product["price"] < high_budget_floor:
-                    evidence = f"{product['title']} {product.get('color')} {' '.join(product['tags'])} {product.get('ragText')}"
-                    if not parsed_need.get("color") or parsed_need["color"] not in evidence:
-                        continue
-                candidates.append(product)
-            if parsed_need.get("mustHave"):
-                must_matched = [product for product in candidates if all(product_satisfies_must(product, must) for must in parsed_need["mustHave"])]
-                if must_matched:
-                    candidates = must_matched
-            candidate_prices = [product["price"] for product in candidates]
-            scored_products = [apply_preference(score_product(product, parsed_need, retrieval_by_product.get(product["id"])), parsed_need, candidate_prices, latest_signal) for product in candidates]
-            if (latest_signal.get("price") or "") == "premium":
-                products = sorted(scored_products, key=lambda product: (product["price"], product["matchScore"]), reverse=True)[:3]
-            elif (latest_signal.get("price") or "") == "lowest":
-                products = sorted(scored_products, key=lambda product: (product["price"], -product["matchScore"]))[:3]
-            elif parsed_need.get("budget"):
-                products = sorted(scored_products, key=lambda product: (budget_priority(product, parsed_need), product["matchScore"]), reverse=True)[:3]
-            elif has_latest_sort_signal(latest_signal):
-                products = sorted(scored_products, key=lambda product: (product["agentScore"].get("preference", 0), product["matchScore"]), reverse=True)[:3]
-            else:
-                products = sorted(scored_products, key=lambda product: product["matchScore"], reverse=True)[:3]
-            if buyer_email:
-                for product in products:
-                    if product["status"] == "listed":
-                        create_lead({"productId": product["id"], "buyerEmail": buyer_email, "buyerNeed": need_text, "source": "buyer_agent"})
-            reply = write_buyer_reply(parsed_need, products, retrieval_docs, latest_signal)
-            trace = [
-                {"label": "请求边界校验", "detail": f"需求 {len(need_text)} 字，邮箱 {'有效' if buyer_email else '未提供'}"},
-                {"label": "意图识别 Agent", "detail": f"{intent['mode']}：{intent['reason']}"},
-                {"label": "概念理解 Agent", "detail": concept_summary},
-                {"label": "本轮信号 Agent", "detail": "、".join(compact([latest_signal.get("price"), latest_signal.get("category"), f"￥{latest_signal['budget']:,}" if latest_signal.get("budget") else "", latest_signal.get("water"), latest_signal.get("color"), *(latest_signal.get("mustHave") or []), *(latest_signal.get("labels") or [])])) or latest_signal.get("rawText") or "无"},
-                {"label": "语义识别 Agent", "detail": f"{parsed_need.get('category') or '未限定品类'} / {('￥' + format(parsed_need['budget'], ',')) if parsed_need.get('budget') else '未限定预算'} / {'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
-                {"label": "Python Agent状态", "detail": "Python 后端完成意图识别、RAG召回、规则排序和解释生成"},
-                {"label": "规则校验 Agent", "detail": f"{'；'.join(validation['passed']) or '基础规则通过'}{('；提醒：' + '；'.join(validation['warnings'])) if validation['warnings'] else ''}"},
-                {"label": "RAG检索 Tool", "detail": f"查询 product_documents，召回 {len(retrieval_docs)} 条证据；命中词：{'、'.join((retrieval_docs[0]['matchedTerms'] if retrieval_docs else [])[:5]) or '无'}；候选池 {len(candidates)} 件"},
-                {"label": "排序 Agent", "detail": f"{products[0]['title']}：总分 {products[0]['agentScore']['total']} = 语义 {products[0]['agentScore']['semantic']} + 规则 {products[0]['agentScore']['rules']} + RAG {products[0]['agentScore']['rag']} + 本轮 {products[0]['agentScore'].get('preference', 0)}" if products else "暂无候选"},
-                {"label": "解释 Agent", "detail": "、".join(products[0]["matchReasons"]) if products else "需要更多需求信息"},
-                {"label": "客资分发 Tool", "detail": "已写入商家客资列表" if buyer_email else "未留邮箱，仅展示匹配结果"},
-            ]
-            retrieval = {"documents": [{
-                "productId": doc["productId"],
-                "productTitle": doc["product"]["title"],
-                "score": doc["score"],
-                "matchedTerms": doc["matchedTerms"],
-                "snippet": doc["snippet"],
-            } for doc in retrieval_docs[:6]]}
-            result = {"runId": run_id, "sessionId": session_id, "mode": "match", "intent": intent, "latestSignal": latest_signal, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": retrieval, "products": products, "trace": trace}
-
-        add_message(session_id, "assistant", result["reply"], result)
-        update_session_state(session_id, {**session_state, "lastMode": result["mode"], "lastIntent": intent, "lastNeed": need_text, "lastParsedNeed": parsed_need if result["mode"] == "match" else session_state.get("lastParsedNeed"), "lastProductIds": [p["id"] for p in result["products"]]})
-        record_agent_run({"id": run_id, "sessionId": session_id, "agentType": "buyer_match", "input": {"need": need_text, "buyerEmail": buyer_email}, "output": {"mode": result["mode"], "intent": intent, "reply": result["reply"], "parsedNeed": parsed_need, "validation": validation, "retrieval": result["retrieval"], "productIds": [p["id"] for p in result["products"]]}, "trace": result["trace"], "status": "completed"})
-        return result
+        return state["result"]
     except Exception as error:
         trace = [{"label": "Agent失败", "detail": str(error)}]
         record_agent_run({"id": run_id, "sessionId": session_id, "agentType": "buyer_match", "input": {"need": need_text, "buyerEmail": buyer_email}, "output": {"error": str(error)}, "trace": trace, "status": "failed"})
@@ -1233,6 +1357,52 @@ def normalize_vlm_text(value):
     return "" if is_empty_vlm_value(text) else text
 
 
+def visible_field(value):
+    text = normalize_vlm_text(value)
+    return "" if "待复核" in text else text
+
+
+def normalize_publish_category(category, shape, image_signal):
+    normalized = normalize_vlm_category(category)
+    if normalized:
+        return normalized
+    shape_text = normalize_vlm_text(shape).lower()
+    if any(term in shape_text for term in ["圆圈", "圆环", "手镯", "镯", "bracelet", "bangle"]):
+        return "手镯"
+    return normalize_vlm_category(image_signal.get("categoryGuess")) or "品类待复核"
+
+
+def normalize_publish_shape(shape, category, image_signal):
+    shape_text = normalize_vlm_text(shape)
+    if category == "手镯" and shape_text.lower() in {"圆圈", "圆环", "bracelet", "bangle"}:
+        return normalize_vlm_text(image_signal.get("shapeGuess")) or "正圈"
+    return shape_text or normalize_vlm_text(image_signal.get("shapeGuess"))
+
+
+def publish_flaw_text(vision_flaw, hint, evidence):
+    hint_flaw = extract_first(hint, SEMANTIC_CATALOG["flawTerms"]) if hint else ""
+    if hint_flaw:
+        return hint_flaw
+    flaw = normalize_vlm_text(vision_flaw)
+    if flaw:
+        return flaw
+    evidence_text = " ".join(str(item) for item in (evidence or []))
+    if any(term in evidence_text for term in ["无明显瑕疵", "肉眼干净", "颜色均匀"]):
+        return "图片未见明显瑕疵"
+    return "以实物复核为准"
+
+
+def publish_title_for(vision):
+    title = "".join(compact([
+        visible_field(vision["water"]),
+        visible_field(vision["color"]),
+        "翡翠",
+        visible_field(vision["shape"]),
+        visible_field(vision["category"]),
+    ]))
+    return title or "翡翠商品"
+
+
 def ollama_vision_understanding(images):
     if os.environ.get("VISION_PROVIDER", "ollama") == "none":
         return {"provider": "ollama_vision", "error": "vision provider disabled"}
@@ -1271,6 +1441,13 @@ def ollama_vision_understanding(images):
             "messages": [{"role": "user", "content": prompt, "images": encoded_images}],
             "stream": False,
             "format": "json",
+            "keep_alive": os.environ.get("OLLAMA_VISION_KEEP_ALIVE", "15m"),
+            "options": {
+                "temperature": 0,
+                "top_p": 0.2,
+                "num_ctx": 2048,
+                "num_predict": int(os.environ.get("OLLAMA_VISION_NUM_PREDICT", "180")),
+            },
         }).encode()
         req = request.Request(f"{ollama_base_url()}/api/chat", data=payload, headers={"Content-Type": "application/json"})
         with request.urlopen(req, timeout=int(os.environ.get("OLLAMA_VISION_TIMEOUT", "60"))) as response:
@@ -1346,20 +1523,21 @@ def publish_image_understanding(hint, images, supplied_analyses):
     analyses = merged_upload_analyses(images, supplied_analyses)
     if not analyses:
         raise ValidationError("Invalid publish request", [{"field": "images", "message": "请先上传翡翠商品图片"}])
+    image_signal = dominant_upload_signal(analyses)
     vlm = ollama_vision_understanding(images)
     if vlm.get("error"):
         raise ValidationError("Invalid publish image", [{"field": "images", "message": f"视觉模型识别失败：{vlm['error']}"}])
     if not vlm.get("isJade"):
         raise ValidationError("Invalid publish image", [{"field": "images", "message": "视觉模型未确认该图片为翡翠商品，请上传清晰的翡翠商品照片"}])
     need = heuristic_need(hint) if hint else {}
-    category = need.get("category") or vlm.get("category") or "品类待复核"
+    category = need.get("category") or normalize_publish_category(vlm.get("category"), vlm.get("shape"), image_signal)
     if category not in SEMANTIC_CATALOG["categories"]:
         category = "品类待复核"
-    water = need.get("water") or vlm.get("water") or "种水待复核"
-    color = need.get("color") or vlm.get("color") or "颜色待复核"
-    shape = need.get("shape") or vlm.get("shape") or ""
+    water = need.get("water") or vlm.get("water") or image_signal.get("waterGuess") or "种水待复核"
+    color = need.get("color") or vlm.get("color") or image_signal.get("dominantTone") or "颜色待复核"
+    shape = need.get("shape") or normalize_publish_shape(vlm.get("shape"), category, image_signal)
     size = publish_size_from_hint(need)
-    flaw = extract_first(hint, SEMANTIC_CATALOG["flawTerms"]) if hint else ""
+    flaw = publish_flaw_text(vlm.get("flaw"), hint, vlm.get("evidence"))
     scenes = [scene for scene in SEMANTIC_CATALOG["scenes"] if scene in hint]
     confidence = min(98, max(55, round(vlm.get("confidence") or 0)))
     return {
@@ -1368,7 +1546,7 @@ def publish_image_understanding(hint, images, supplied_analyses):
         "color": color,
         "shape": shape,
         "size": size,
-        "flaw": flaw or "以实物复核为准",
+        "flaw": flaw,
         "scene": "/".join(scenes) or "日常佩戴",
         "price": estimated_publish_price(category, water, color),
         "confidence": confidence,
@@ -1382,19 +1560,17 @@ def publish_image_understanding(hint, images, supplied_analyses):
 
 def local_draft(hint, images, image_analyses=None):
     vision = publish_image_understanding(hint, images, image_analyses)
-    title_parts = [vision["water"], vision["color"], "翡翠", vision["category"]]
-    title = "".join([part for part in title_parts if part and "待复核" not in part])
-    if not title:
-        title = f"翡翠{vision['category']}"
+    title = publish_title_for(vision)
     quality = "".join([part for part in [vision["water"], vision["color"]] if "待复核" not in part]) or "实物质感待复核"
-    listing_size_text = f"，尺寸约{vision['size']}" if vision["size"] else "，尺寸以实测为准"
-    shape_text = f"，{vision['shape']}造型" if vision["shape"] else ""
+    category_text = visible_field(vision["category"]) or "翡翠商品"
+    shape_text = visible_field(vision["shape"]) or "器型待复核"
+    size_text = vision["size"] or "待商家实测"
     flaw_text = vision["flaw"] if vision["flaw"] != "以实物复核为准" else "瑕疵以实物复核为准"
     tags = compact([
-        vision["water"] if "待复核" not in vision["water"] else "",
-        vision["color"] if "待复核" not in vision["color"] else "",
-        vision["category"],
-        vision["shape"],
+        visible_field(vision["water"]),
+        visible_field(vision["color"]),
+        f"翡翠{category_text}" if category_text != "翡翠商品" else "",
+        shape_text if shape_text != "器型待复核" else "",
         vision["size"],
         vision["flaw"] if vision["flaw"] != "以实物复核为准" else "",
         "天然A货",
@@ -1402,7 +1578,7 @@ def local_draft(hint, images, image_analyses=None):
         vision["scene"],
     ])[:10]
     return {
-        "title": title[:18],
+        "title": title[:32],
         "category": vision["category"],
         "price": vision["price"],
         "originPrice": round(vision["price"] * 1.08 / 100) * 100,
@@ -1418,8 +1594,8 @@ def local_draft(hint, images, image_analyses=None):
         "flaws": vision["flaw"],
         "treatment": "天然A货",
         "scene": vision["scene"],
-        "intro": f"{quality}，图片识别为{vision['category']}，清爽耐看，适合{vision['scene']}。",
-        "detail": f"这款翡翠{vision['category']}{shape_text}，呈现{quality}质感，色调清雅，整体温润耐看{listing_size_text}。{flaw_text}，适合{vision['scene']}。",
+        "intro": f"{quality}，{shape_text}{category_text}，{flaw_text}，适合{vision['scene']}。",
+        "detail": f"这款{title}整体为{visible_field(vision['water']) or '种水待复核'}质地，{visible_field(vision['color']) or '颜色待复核'}色调，{shape_text}器型，尺寸：{size_text}。瑕疵说明：{flaw_text}；处理方式为天然A货，支持复检。适合{vision['scene']}，可用于后续 RAG 检索、预算匹配、标签召回和 Agent 推荐解释。",
         "tags": tags,
         "images": images,
         "merchantNotes": "AI已基于商家上传图片生成，发布前请复核尺寸、瑕疵、证书和价格。",
@@ -1441,16 +1617,55 @@ def local_draft(hint, images, image_analyses=None):
     }
 
 
+def publish_prepare_node(state):
+    payload = state["payload"]
+    return {
+        "seller_id": payload["sellerId"],
+        "hint": str(payload.get("hint") or payload.get("notes") or ""),
+        "images": payload.get("images") if isinstance(payload.get("images"), list) else [],
+        "image_analyses": payload.get("imageAnalyses") if isinstance(payload.get("imageAnalyses"), list) else [],
+    }
+
+
+def publish_draft_node(state):
+    draft = {
+        **local_draft(state["hint"], state["images"], state["image_analyses"]),
+        "sellerId": state["seller_id"],
+        "provider": "ollama-vision-agent",
+    }
+    return {"output": draft}
+
+
+def publish_record_node(state):
+    draft = state["output"]
+    trace = [{"label": "LangGraph状态", "detail": "LangGraph merchant_publish 已完成"}, *[{"label": note, "detail": "视觉识别与字段组装已完成"} for note in draft["agentNotes"]]]
+    record_agent_run({"id": state["run_id"], "agentType": "merchant_publish", "input": {"sellerId": state["seller_id"], "hint": state["hint"], "images": state["images"]}, "output": draft, "trace": trace, "status": "completed"})
+    return {"result": {**draft, "runId": state["run_id"], "trace": trace}}
+
+
+def build_publish_graph():
+    graph = StateGraph(AgentGraphState)
+    graph.add_node("prepare_publish", publish_prepare_node)
+    graph.add_node("draft_product", publish_draft_node)
+    graph.add_node("record_run", publish_record_node)
+    graph.add_edge(START, "prepare_publish")
+    graph.add_edge("prepare_publish", "draft_product")
+    graph.add_edge("draft_product", "record_run")
+    graph.add_edge("record_run", END)
+    return graph.compile()
+
+
+PUBLISH_GRAPH = build_publish_graph()
+
+
 def run_publish_agent(payload):
     run_id = str(uuid.uuid4())
-    seller_id = payload["sellerId"]
-    hint = str(payload.get("hint") or payload.get("notes") or "")
-    images = payload.get("images") if isinstance(payload.get("images"), list) else []
-    image_analyses = payload.get("imageAnalyses") if isinstance(payload.get("imageAnalyses"), list) else []
-    draft = {**local_draft(hint, images, image_analyses), "sellerId": seller_id, "provider": "python-vision-rule"}
-    trace = [{"label": "Agent状态", "detail": "Python 发布 Agent 已完成"}, *[{"label": note, "detail": "本地规则 agent 已完成"} for note in draft["agentNotes"]]]
-    record_agent_run({"id": run_id, "agentType": "merchant_publish", "input": {"sellerId": seller_id, "hint": hint, "images": images}, "output": draft, "trace": trace, "status": "completed"})
-    return {**draft, "runId": run_id}
+    try:
+        state = PUBLISH_GRAPH.invoke({"payload": payload, "run_id": run_id})
+        return state["result"]
+    except Exception as error:
+        record_agent_run({"id": run_id, "agentType": "merchant_publish", "input": payload, "output": {"error": str(error)}, "trace": [{"label": "Agent失败", "detail": str(error)}], "status": "failed"})
+        raise
 
 
 def local_followup(lead):
@@ -1463,8 +1678,8 @@ def local_followup(lead):
     }
 
 
-def run_lead_followup_agent(payload):
-    run_id = str(uuid.uuid4())
+def lead_load_node(state):
+    payload = state["payload"]
     seller_id = payload["sellerId"]
     lead_id = payload["leadId"]
     session_id = f"lead-followup-{lead_id}"
@@ -1473,14 +1688,49 @@ def run_lead_followup_agent(payload):
         raise ValueError("Lead not found")
     get_or_create_session(session_id, "lead_followup", lead["sellerEmail"])
     add_message(session_id, "user", lead["buyerNeed"], {"leadId": lead_id, "sellerId": seller_id})
-    output = {**local_followup(lead), "sellerId": seller_id, "leadId": int(lead_id), "provider": "python-rule"}
+    return {"seller_id": seller_id, "lead_id": lead_id, "session_id": session_id, "lead": lead}
+
+
+def lead_followup_node(state):
+    output = {**local_followup(state["lead"]), "sellerId": state["seller_id"], "leadId": int(state["lead_id"]), "provider": "python-rule"}
     trace = [
-        {"label": "客资读取 Tool", "detail": f"读取客资 #{lead['id']} 与商品「{lead['productTitle']}」"},
+        {"label": "客资读取 Tool", "detail": f"读取客资 #{state['lead']['id']} 与商品「{state['lead']['productTitle']}」"},
         {"label": "需求摘要 Agent", "detail": output["buyerSummary"]},
         {"label": "跟进话术 Agent", "detail": output["reply"]},
         {"label": "下一步动作", "detail": "、".join(output["nextActions"])},
-        {"label": "Agent状态", "detail": "Python 客资跟进 Agent 已完成"},
+        {"label": "LangGraph状态", "detail": "LangGraph lead_followup 已完成"},
     ]
-    add_message(session_id, "assistant", output["reply"], {"leadId": lead_id, "sellerId": seller_id, "output": output, "trace": trace})
-    record_agent_run({"id": run_id, "sessionId": session_id, "agentType": "lead_followup", "input": {"sellerId": seller_id, "leadId": lead_id}, "output": output, "trace": trace, "status": "completed"})
-    return {"runId": run_id, "sessionId": session_id, "lead": lead, **output, "trace": trace}
+    return {"output": output, "result": {"trace": trace}}
+
+
+def lead_record_node(state):
+    output = state["output"]
+    trace = state["result"]["trace"]
+    add_message(state["session_id"], "assistant", output["reply"], {"leadId": state["lead_id"], "sellerId": state["seller_id"], "output": output, "trace": trace})
+    record_agent_run({"id": state["run_id"], "sessionId": state["session_id"], "agentType": "lead_followup", "input": {"sellerId": state["seller_id"], "leadId": state["lead_id"]}, "output": output, "trace": trace, "status": "completed"})
+    return {"result": {"runId": state["run_id"], "sessionId": state["session_id"], "lead": state["lead"], **output, "trace": trace}}
+
+
+def build_lead_followup_graph():
+    graph = StateGraph(AgentGraphState)
+    graph.add_node("load_lead", lead_load_node)
+    graph.add_node("write_followup", lead_followup_node)
+    graph.add_node("record_run", lead_record_node)
+    graph.add_edge(START, "load_lead")
+    graph.add_edge("load_lead", "write_followup")
+    graph.add_edge("write_followup", "record_run")
+    graph.add_edge("record_run", END)
+    return graph.compile()
+
+
+LEAD_FOLLOWUP_GRAPH = build_lead_followup_graph()
+
+
+def run_lead_followup_agent(payload):
+    run_id = str(uuid.uuid4())
+    try:
+        state = LEAD_FOLLOWUP_GRAPH.invoke({"payload": payload, "run_id": run_id})
+        return state["result"]
+    except Exception as error:
+        record_agent_run({"id": run_id, "sessionId": f"lead-followup-{payload.get('leadId')}", "agentType": "lead_followup", "input": payload, "output": {"error": str(error)}, "trace": [{"label": "Agent失败", "detail": str(error)}], "status": "failed"})
+        raise

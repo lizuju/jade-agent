@@ -1,7 +1,8 @@
+import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 
 const commands = [
-  ["api", "python3", ["-u", "-m", "backend.app"]],
+  ["api", existsSync(".venv/bin/python") ? ".venv/bin/python" : "python3", ["-u", "-m", "backend.app"]],
   ["web", "vite", ["--host", "127.0.0.1"]]
 ];
 

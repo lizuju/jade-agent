@@ -109,15 +109,21 @@ The explanation step turns ranking output into a buyer-facing response: what pro
 
 The system stores conversation state in `agent_sessions` and `messages`, agent execution records in `agent_runs`, and concept hits in `query_understanding_events`.
 
-## How LangChain Is Used
+## How LangGraph Is Used
 
-The current codebase does not directly install or import LangChain. It uses lightweight Python function orchestration in `backend/agent.py` so the local demo stays easy to run and every trace field remains explicit.
+The backend now uses LangGraph. `backend/agent.py` exposes three compiled graphs:
 
-Using LangChain terminology, the current implementation maps to these concepts:
+- `BUYER_MATCH_GRAPH`: buyer sourcing with context preparation, intent routing, budget clarification, customer-service replies, product matching, and run logging.
+- `PUBLISH_GRAPH`: merchant publishing with publish-input preparation, image-based product draft generation, and run logging.
+- `LEAD_FOLLOWUP_GRAPH`: lead follow-up with lead loading, follow-up copy generation, and run logging.
 
-| LangChain concept | Current implementation |
+Using LangChain / LangGraph terminology, the current implementation maps to these concepts:
+
+| LangChain / LangGraph concept | Current implementation |
 | --- | --- |
-| Chain / Runnable | Sequential orchestration inside `run_buyer_match_agent` |
+| Graph | `BUYER_MATCH_GRAPH`, `PUBLISH_GRAPH`, `LEAD_FOLLOWUP_GRAPH` |
+| Node | `buyer_prepare_node`, `buyer_match_node`, `publish_draft_node`, `lead_followup_node`, etc. |
+| Conditional Edge | Buyer sourcing routes to budget clarification, customer service, or product matching based on intent |
 | Tool | RAG retrieval, inventory boundary check, lead creation, product draft generation |
 | Retriever | `search_product_documents()` |
 | Document Store | SQLite table `product_documents` |
@@ -125,7 +131,7 @@ Using LangChain terminology, the current implementation maps to these concepts:
 | Callback / Trace | `trace` fields and the `agent_runs` table |
 | Prompt / Output Parser | Concept normalization, structured signals, and optional Ollama JSON parsing in `query_understanding.py` |
 
-In other words, this project does not currently rely on the LangChain framework. It implements a LangChain-style agent pipeline: input -> understanding -> retrieval -> tool execution -> ranking -> explanation -> run logging. If LangChain is introduced later, the first natural extraction points are wrapping `search_product_documents()` as a Retriever, wrapping query understanding and ranking as Runnables, and connecting `agent_runs` to callbacks or tracing.
+Business logic still lives in local Python functions. LangGraph is used to organize those steps into branchable, traceable, replaceable agent workflows.
 
 ## RAG Design
 

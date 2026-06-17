@@ -109,15 +109,21 @@ SQLite 数据层
 
 系统用 `agent_sessions` 和 `messages` 保存会话状态，用 `agent_runs` 保存每次 agent 执行的输入、输出和 trace，用 `query_understanding_events` 记录每次需求理解命中的概念信号。
 
-## LangChain 如何使用
+## LangGraph 如何使用
 
-当前代码没有直接安装或导入 LangChain。项目选择了更轻量的 Python 函数编排，把每一步 agent 流程显式写在 `backend/agent.py` 中，这样本地演示更稳定，也更容易控制每个 trace 字段。
+当前后端已经接入 LangGraph。`backend/agent.py` 暴露三个编排图：
 
-如果用 LangChain 的概念来理解，本系统的设计对应关系是：
+- `BUYER_MATCH_GRAPH`：买家找货，节点包括上下文准备、意图分流、预算澄清、客服回复、商品匹配和运行记录。
+- `PUBLISH_GRAPH`：商家发布，节点包括发布输入准备、图片识别草稿生成和运行记录。
+- `LEAD_FOLLOWUP_GRAPH`：客资跟进，节点包括客资读取、跟进话术生成和运行记录。
 
-| LangChain 概念 | 当前项目中的对应实现 |
+如果用 LangChain / LangGraph 的概念来理解，本系统的设计对应关系是：
+
+| LangChain / LangGraph 概念 | 当前项目中的对应实现 |
 | --- | --- |
-| Chain / Runnable | `run_buyer_match_agent` 中的顺序编排 |
+| Graph | `BUYER_MATCH_GRAPH`、`PUBLISH_GRAPH`、`LEAD_FOLLOWUP_GRAPH` |
+| Node | `buyer_prepare_node`、`buyer_match_node`、`publish_draft_node`、`lead_followup_node` 等 |
+| Conditional Edge | 买家找货根据意图路由到预算澄清、客服回复或商品匹配 |
 | Tool | RAG 检索、库存边界检查、客资写入、商品发布草稿生成 |
 | Retriever | `search_product_documents()` |
 | Document Store | SQLite 表 `product_documents` |
@@ -125,7 +131,7 @@ SQLite 数据层
 | Callback / Trace | `trace` 字段和 `agent_runs` 表 |
 | Prompt / Output Parser | `query_understanding.py` 中的概念归一、结构化信号和可选 Ollama JSON 解析 |
 
-也就是说，这个项目目前不是“调用 LangChain 框架完成 agent”，而是实现了一个 LangChain 风格的 agent 管线：输入 -> 理解 -> 检索 -> 工具执行 -> 排序 -> 解释 -> 记录。后续如果接入 LangChain，可以优先把 `search_product_documents()` 封装成 Retriever，把需求理解和排序封装成 Runnable，再把 `agent_runs` 接到 callback 或 tracing 层。
+业务规则仍然保留在本地 Python 函数中，LangGraph 负责把这些步骤组织成可分流、可追踪、可替换的 agent 工作流。
 
 ## RAG 如何设计
 
