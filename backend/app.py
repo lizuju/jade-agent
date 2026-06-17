@@ -413,6 +413,7 @@ def main():
         seed_database()
         print("Database seeded by Python backend")
         return
+    seed_database()
     port = int(os.environ.get("PORT") or "8787")
     server = ThreadingHTTPServer(("127.0.0.1", port), ApiHandler)
     print(f"Jade Python API listening on http://127.0.0.1:{port}")

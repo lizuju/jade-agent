@@ -992,4 +992,3 @@ def seed_database():
 
 
 execute_schema()
-seed_database()
