@@ -338,17 +338,25 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.json_response({"error": "Not found"}, 404)
 
     def save_uploaded_image(self, file):
-        data_url = str(file.get("dataUrl") or "")
-        match = re.match(r"^data:(image/(?:png|jpeg|jpg|webp));base64,(.+)$", data_url)
+        match = self.parse_image_data_url(file.get("dataUrl"))
         if not match:
             raise ValidationError("Invalid upload", [{"field": "images", "message": "只支持 png、jpg、jpeg 或 webp 图片"}])
         ext = match.group(1).split("/")[1].replace("jpeg", "jpg")
         filename = f"{int(time.time() * 1000)}-{os.urandom(5).hex()}.{ext}"
         (UPLOAD_DIR / filename).write_bytes(base64.b64decode(match.group(2)))
         analysis = self.clean_upload_analysis(file.get("analysis"))
+        vision_match = self.parse_image_data_url(file.get("visionDataUrl"))
+        if vision_match:
+            vision_ext = vision_match.group(1).split("/")[1].replace("jpeg", "jpg")
+            vision_filename = f"{Path(filename).stem}.vision.{vision_ext}"
+            (UPLOAD_DIR / vision_filename).write_bytes(base64.b64decode(vision_match.group(2)))
+            analysis["visionUrl"] = f"/uploads/{vision_filename}"
         analysis.update({"name": str(file.get("name") or filename)[:120], "url": f"/uploads/{filename}"})
         (UPLOAD_DIR / f"{filename}.meta.json").write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
         return {"url": f"/uploads/{filename}", "analysis": analysis}
+
+    def parse_image_data_url(self, value):
+        return re.match(r"^data:(image/(?:png|jpeg|jpg|webp));base64,(.+)$", str(value or ""))
 
     def clean_upload_analysis(self, value):
         if not isinstance(value, dict):

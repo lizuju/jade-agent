@@ -263,9 +263,16 @@ function readImageForUpload(file) {
         const dominantTone = purpleRatio > 0.12 && greenRatio > 0.08 ? "春彩" : purpleRatio > 0.12 ? "紫罗兰" : blueRatio > 0.26 ? "蓝水" : greenRatio > 0.34 ? "飘绿" : paleRatio > 0.35 && avgG >= avgR ? "晴底" : paleRatio > 0.35 ? "白冰" : avgG > avgR && avgG > avgB ? "绿色系" : "浅色";
         const waterGuess = paleRatio > 0.42 ? "冰种" : paleRatio > 0.24 ? "糯冰" : "糯种";
         const jadeScore = Math.min(99, Math.round(greenRatio * 62 + paleRatio * 32 + blueRatio * 16 + purpleRatio * 70 + (avgG >= avgR && avgG >= avgB ? 14 : 0)));
+        const inferenceCanvas = document.createElement("canvas");
+        const maxInferenceSide = 768;
+        const inferenceScale = Math.min(1, maxInferenceSide / Math.max(image.width, image.height, 1));
+        inferenceCanvas.width = Math.max(1, Math.round(image.width * inferenceScale));
+        inferenceCanvas.height = Math.max(1, Math.round(image.height * inferenceScale));
+        inferenceCanvas.getContext("2d").drawImage(image, 0, 0, inferenceCanvas.width, inferenceCanvas.height);
         resolve({
           name: file.name,
           dataUrl,
+          visionDataUrl: inferenceCanvas.toDataURL("image/jpeg", 0.82),
           analysis: {
             width: image.width,
             height: image.height,
@@ -819,7 +826,7 @@ function ProductEditorPreview({ draft }) {
         <div className="agent-trace compact">
           <div><CheckCircle2 size={16} /><span>图片校验</span><small>{vision.isJade ? `翡翠图片通过，置信度 ${vision.confidence}%` : "未通过"}</small></div>
           <div><CheckCircle2 size={16} /><span>识别字段</span><small>{[vision.category, vision.water, vision.color, vision.shape].filter(Boolean).join(" / ")}</small></div>
-          <div><CheckCircle2 size={16} /><span>识别来源</span><small>{vision.provider === "ollama_vision" ? `Ollama 视觉模型${vision.model ? `：${vision.model}` : ""}` : `本地图像特征兜底${vision.evidence?.[0] ? `：${vision.evidence[0]}` : ""}`}</small></div>
+          <div><CheckCircle2 size={16} /><span>识别来源</span><small>Ollama 视觉模型{vision.model ? `：${vision.model}` : ""}</small></div>
         </div>
       ) : null}
       <ReadOnlyField label="商品标题（10字以内）" value={draft.title} />
