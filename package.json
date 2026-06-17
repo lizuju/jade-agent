@@ -7,6 +7,8 @@
     "dev": "node scripts/dev.js",
     "dev:web": "vite --host 127.0.0.1",
     "dev:api": "sh -c 'if [ -x .venv/bin/python ]; then .venv/bin/python -u -m backend.app; else python3 -u -m backend.app; fi'",
+    "dev:graph": "sh -c 'if [ -x .venv/bin/langgraph ]; then .venv/bin/langgraph dev --no-browser --host 127.0.0.1 --port 2024; else langgraph dev --no-browser --host 127.0.0.1 --port 2024; fi'",
+    "graph:validate": "sh -c 'if [ -x .venv/bin/langgraph ]; then .venv/bin/langgraph validate; else langgraph validate; fi'",
     "build": "vite build",
     "start": "sh -c 'if [ -x .venv/bin/python ]; then .venv/bin/python -u -m backend.app; else python3 -u -m backend.app; fi'",
     "seed": "sh -c 'if [ -x .venv/bin/python ]; then .venv/bin/python -u -m backend.app --seed-only; else python3 -u -m backend.app --seed-only; fi'"

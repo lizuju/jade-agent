@@ -133,6 +133,29 @@ Using LangChain / LangGraph terminology, the current implementation maps to thes
 
 Business logic still lives in local Python functions. LangGraph is used to organize those steps into branchable, traceable, replaceable agent workflows.
 
+### Local LangSmith Studio
+
+The project also includes `langgraph.json` and `backend/studio_graphs.py` to expose the existing workflows to LangSmith Studio:
+
+```bash
+npm run graph:validate
+npm run dev:graph
+```
+
+Use this Base URL in Studio:
+
+```text
+http://127.0.0.1:2024
+```
+
+Available graphs:
+
+- `buyer_match`: buyer sourcing. You can pass `need`, `buyerEmail`, and `sessionId`.
+- `merchant_publish`: merchant publishing. Pass `sellerId` and at least one uploaded image path, for example `/uploads/xxx.jpg`.
+- `lead_followup`: lead follow-up. You can pass `sellerId` and `leadId`; otherwise it uses the latest local seed lead.
+
+Ports: `8787` is the product API, `5173` is the frontend, and `2024` is the LangGraph Studio Agent Server.
+
 ## RAG Design
 
 The RAG layer is designed around the product catalog, not generic knowledge-base Q&A.

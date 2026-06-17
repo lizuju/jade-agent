@@ -1,1 +1,2 @@
-langgraph==0.2.76
+langgraph==1.2.5
+langgraph-cli[inmem]==0.4.30

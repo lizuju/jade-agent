@@ -133,6 +133,29 @@ SQLite 数据层
 
 业务规则仍然保留在本地 Python 函数中，LangGraph 负责把这些步骤组织成可分流、可追踪、可替换的 agent 工作流。
 
+### LangSmith Studio 本地查看
+
+项目同时提供 `langgraph.json` 和 `backend/studio_graphs.py`，用于把现有工作流暴露给 LangSmith Studio：
+
+```bash
+npm run graph:validate
+npm run dev:graph
+```
+
+打开 Studio 时 Base URL 填：
+
+```text
+http://127.0.0.1:2024
+```
+
+可选图：
+
+- `buyer_match`：买家找货，可直接传 `need`、`buyerEmail`、`sessionId`。
+- `merchant_publish`：商家发布，需要传 `sellerId` 和至少一张已上传图片路径，例如 `/uploads/xxx.jpg`。
+- `lead_followup`：客资跟进，可传 `sellerId`、`leadId`，不传时使用本地种子数据里的最新客资。
+
+端口分工：`8787` 是业务 API，`5173` 是前端页面，`2024` 是 LangGraph Studio Agent Server。
+
 ## RAG 如何设计
 
 本项目的 RAG 是围绕商品库设计的，不是通用知识库问答。

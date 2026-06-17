@@ -1,0 +1,10 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "buyer_match": "./backend/studio_graphs.py:buyer_match",
+    "merchant_publish": "./backend/studio_graphs.py:merchant_publish",
+    "lead_followup": "./backend/studio_graphs.py:lead_followup"
+  }
+}
