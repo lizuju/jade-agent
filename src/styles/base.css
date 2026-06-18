@@ -1,0 +1,303 @@
+:root {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  color: #17211b;
+  background: #edf3ef;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(5, 126, 77, 0.08), transparent 34rem),
+    linear-gradient(135deg, #edf3ef, #f8faf8 46%, #e9eeef);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.app-shell {
+  display: grid;
+  min-height: 100vh;
+  align-content: start;
+  justify-items: center;
+  padding: 24px;
+}
+
+.portal-switch {
+  display: grid;
+  width: min(430px, calc(100vw - 32px));
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.portal-switch button {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 2px 8px;
+  align-items: center;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid #dce8e1;
+  border-radius: 8px;
+  color: #60766b;
+  background: rgba(255, 255, 255, 0.82);
+  text-align: left;
+}
+
+.portal-switch button.active {
+  color: #fff;
+  background: #07874f;
+  border-color: #07874f;
+  box-shadow: 0 12px 26px rgba(7, 135, 79, 0.2);
+}
+
+.portal-switch svg {
+  grid-row: span 2;
+}
+
+.portal-switch span {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.portal-switch small {
+  color: currentColor;
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+.phone-frame {
+  width: min(430px, calc(100vw - 32px));
+  height: min(860px, calc(100vh - 118px));
+  min-height: 720px;
+  overflow: hidden;
+  border: 1px solid rgba(19, 63, 43, 0.14);
+  border-radius: 24px;
+  background: #f7fbf8;
+  box-shadow: 0 24px 80px rgba(21, 45, 34, 0.18);
+}
+
+.screen {
+  position: relative;
+  height: 100%;
+  overflow-y: auto;
+  padding: 16px 16px 96px;
+  background: #f7fbf8;
+}
+
+.screen::-webkit-scrollbar {
+  width: 0;
+}
+
+.buyer-screen {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  padding: 0;
+}
+
+.buyer-screen > .brandbar {
+  margin: 16px 16px 0;
+}
+
+.buyer-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+.buyer-scroll::-webkit-scrollbar {
+  width: 0;
+}
+
+.soft-screen {
+  background:
+    linear-gradient(180deg, rgba(18, 145, 88, 0.12), transparent 210px),
+    #f7fbf8;
+}
+
+.with-nav {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 76px;
+  overflow: hidden;
+  padding: 0;
+}
+
+.nav-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.fixed-tabs-screen {
+  grid-template-rows: auto minmax(0, 1fr) 76px;
+}
+
+.fixed-list-head {
+  z-index: 8;
+  padding: 16px 16px 0;
+  background: #f7fbf8;
+}
+
+.fixed-list-head .tabs {
+  margin: 8px 0 0;
+}
+
+.fixed-list-scroll {
+  padding: 12px 16px 16px;
+}
+
+.nav-scroll::-webkit-scrollbar {
+  width: 0;
+}
+
+.loading {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  color: #087243;
+  font-weight: 700;
+}
+
+.brandbar,
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 42px;
+  margin-bottom: 14px;
+}
+
+.screen > .topbar,
+.nav-scroll > .topbar {
+  position: sticky;
+  top: -16px;
+  z-index: 10;
+  height: 58px;
+  margin: -16px -16px 14px;
+  padding: 16px 16px 0;
+  background: #f7fbf8;
+}
+
+.brand {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 17px;
+}
+
+.logo-mark {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: linear-gradient(135deg, #0a8d54, #0d5d39);
+  font-weight: 800;
+}
+
+.logo-mark.large {
+  width: 64px;
+  height: 64px;
+  font-size: 32px;
+}
+
+.pill-button,
+.primary-button,
+.secondary-button,
+.icon-btn,
+.link-btn,
+.danger-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pill-button,
+.primary-button {
+  color: #fff;
+  background: #07874f;
+}
+
+.primary-button {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 16px;
+  box-shadow: 0 8px 18px rgba(7, 135, 79, 0.18);
+}
+
+.primary-button:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.secondary-button {
+  color: #193227;
+  background: #fff;
+  border: 1px solid #dce8e1;
+}
+
+.pill-button {
+  padding: 0 16px;
+}
+
+.icon-btn {
+  width: 34px;
+  color: #1a2b22;
+  background: transparent;
+}
+
+.link-btn {
+  color: #07874f;
+  background: transparent;
+}
+
+.danger-link {
+  color: #cf3f30;
+  background: transparent;
+}
+
+.topbar-title {
+  flex: 1;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.topbar-side {
+  display: flex;
+  width: 82px;
+  align-items: center;
+}
+
+.topbar-right {
+  justify-content: flex-end;
+}

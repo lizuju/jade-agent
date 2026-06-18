@@ -9,5 +9,7 @@ __pycache__/
 .playwright-cli/
 .langgraph_api/
 output/playwright/
+playwright-report/
+test-results/
 .env
 .env.*

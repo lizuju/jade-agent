@@ -12,7 +12,10 @@
     "build": "vite build",
     "start": "sh -c 'if [ -x .venv/bin/python ]; then .venv/bin/python -u -m backend.app; else python3 -u -m backend.app; fi'",
     "seed": "sh -c 'if [ -x .venv/bin/python ]; then .venv/bin/python -u -m backend.app --seed-only; else python3 -u -m backend.app --seed-only; fi'",
-    "eval:agents": "sh -c 'if [ -x .venv/bin/python ]; then .venv/bin/python scripts/eval_agents.py; else python3 scripts/eval_agents.py; fi'"
+    "eval:agents": "sh -c 'if [ -x .venv/bin/python ]; then .venv/bin/python scripts/eval_agents.py; else python3 scripts/eval_agents.py; fi'",
+    "test:api": "sh -c 'if [ -x .venv/bin/python ]; then .venv/bin/python -m pytest tests; else python3 -m pytest tests; fi'",
+    "test:e2e": "playwright test",
+    "test": "npm run eval:agents && npm run test:api && npm run test:e2e"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -20,6 +23,7 @@
     "react-dom": "^19.1.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@vitejs/plugin-react": "^6.0.2",
     "vite": "^8.0.16"
   }

@@ -1,0 +1,312 @@
+.chat {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 12px 0;
+}
+
+.user-chat {
+  justify-content: flex-end;
+}
+
+.avatar {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.avatar.bot {
+  color: #0a7547;
+  background: #e8f5ee;
+}
+
+.avatar.user {
+  color: #fff;
+  background: #07874f;
+}
+
+.bubble {
+  max-width: 316px;
+  padding: 10px 12px;
+  border: 1px solid #e4ede8;
+  border-radius: 8px;
+  background: #fff;
+  color: #23372c;
+  font-size: 13px;
+  line-height: 1.58;
+  box-shadow: 0 8px 24px rgba(27, 66, 45, 0.06);
+}
+
+.bubble.user {
+  color: #fff;
+  background: #07874f;
+  border-color: #07874f;
+}
+
+.bubble time {
+  display: block;
+  margin-top: 4px;
+  color: #95a59d;
+  font-size: 10px;
+  text-align: right;
+}
+
+.bubble.user time {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.quick-tags {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+  margin: 6px 36px 16px 0;
+}
+
+.quick-tags button {
+  width: fit-content;
+  max-width: 306px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: #52685e;
+  background: #fff;
+  border: 1px solid #e0ebe5;
+  font-size: 12px;
+  text-align: left;
+}
+
+.card-section,
+.lead-box,
+.upload-card,
+.steps-card,
+.editor-preview,
+.edit-form,
+.list-section,
+.lead-detail-card,
+.followup-card,
+.agent-mini,
+.notice-card,
+.permission-list,
+.plan-card,
+.profile-card,
+.menu-list,
+.login-form {
+  padding: 14px;
+  border: 1px solid #e0ebe5;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(24, 67, 44, 0.06);
+}
+
+.card-section h3,
+.list-section h3,
+.agent-mini h3,
+.followup-card h3,
+.plan-card h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px;
+}
+
+.product-card {
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #e0ebe5;
+  border-radius: 8px;
+  background: #fff;
+  text-align: left;
+}
+
+.product-card img,
+.product-card .image-fallback {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  background: #0b0f0d;
+}
+
+.product-card-body {
+  display: grid;
+  gap: 4px;
+  min-height: 78px;
+  padding: 8px;
+}
+
+.product-card-body strong,
+.manage-row strong,
+.lead-row strong,
+.lead-line strong {
+  display: block;
+  overflow: hidden;
+  color: #1f3328;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-card-body span {
+  overflow: hidden;
+  color: #71837a;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-card-body em {
+  overflow: hidden;
+  color: #087243;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-price {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #df4d43;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.product-price small {
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: #bd7a17;
+  background: #fff2cf;
+  font-size: 9px;
+}
+
+.agent-trace {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #eef8f2;
+}
+
+.agent-trace.compact {
+  padding: 10px;
+}
+
+.agent-trace div,
+.trace-line,
+.step-line {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: #087243;
+}
+
+.step-line div {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-trace span,
+.trace-line strong,
+.step-line strong {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.agent-trace small,
+.trace-line span,
+.step-line span {
+  color: #5f746b;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.input-dock {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #e0ebe5;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(24, 67, 44, 0.1);
+}
+
+.buyer-screen .input-dock {
+  margin: 0 16px 16px;
+}
+
+.input-dock input,
+.lead-box input,
+.field input,
+.field textarea,
+.login-form input {
+  width: 100%;
+  border: 1px solid #dce8e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f3328;
+  outline: 0;
+}
+
+.input-dock input {
+  min-height: 40px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.input-dock button {
+  color: #fff;
+  background: #07874f;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.input-dock button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.input-notice {
+  grid-column: 1 / 3;
+  color: #9e3b2f;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.agent-proof {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid #dce8e1;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.agent-proof div {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-proof strong {
+  color: #087243;
+  font-size: 12px;
+}
+
+.agent-proof span,
+.agent-proof small {
+  color: #5f746b;
+  font-size: 11px;
+  line-height: 1.45;
+}
