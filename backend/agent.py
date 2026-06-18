@@ -36,12 +36,14 @@ from .validation import ValidationError
 ROOT_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = ROOT_DIR / "public" / "uploads"
 OLLAMA_VISION_CANDIDATES = ("qwen2.5vl", "qwen2-vl", "qwen3-vl", "llava", "bakllava", "minicpm-v", "moondream")
+VISION_RESULT_VERSION = 3
+CATEGORY_CLASSIFIER_VERSION = 3
 
 SEMANTIC_CATALOG = {
-    "categories": ["手镯", "吊坠", "项链", "戒面", "平安扣", "珠链", "手链", "手串", "无事牌", "耳坠", "挂件", "胸针", "把件", "摆件"],
+    "categories": ["手镯", "吊坠", "项链", "戒指", "戒面", "平安扣", "珠链", "手链", "手串", "无事牌", "耳坠", "挂件", "胸针", "把件", "摆件"],
     "waters": ["豆种", "糯种", "糯冰", "冰糯", "冰种", "高冰", "玻璃种"],
     "colors": ["晴底", "晴底色", "晴水", "白冰", "飘花", "飘绿", "阳绿", "正阳绿", "满绿", "辣绿", "蓝水", "紫罗兰", "春彩", "黄翡", "红翡", "油青", "墨翠", "帝王绿"],
-    "shapes": ["正圈", "圆条", "贵妃", "水滴", "如意", "佛公", "观音", "叶子", "葫芦", "蛋面", "马鞍", "圆扣", "怀古扣", "圆珠", "算盘珠", "素牌", "龙牌"],
+    "shapes": ["正圈", "圆条", "贵妃", "水滴", "如意", "佛公", "观音", "叶子", "葫芦", "蛋面", "马鞍", "方形", "圆扣", "怀古扣", "圆珠", "算盘珠", "素牌", "龙牌"],
     "flawTerms": ["无纹裂", "无裂", "无纹", "微瑕", "肉眼干净", "轻微棉絮", "少量石纹", "边缘细小矿点"],
     "scenes": ["送礼", "自用", "收藏", "日常佩戴", "通勤佩戴", "节日礼赠"],
 }
@@ -70,6 +72,38 @@ FLAW_FAMILIES = {
     "无纹裂": ["无纹裂", "无裂", "无纹", "肉眼干净"],
     "无裂": ["无纹裂", "无裂", "肉眼干净"],
     "无纹": ["无纹裂", "无纹", "肉眼干净"],
+}
+
+VLM_TERM_TRANSLATIONS = {
+    "multicolored": "俏色",
+    "multi-colored": "俏色",
+    "colorful": "俏色",
+    "green": "翠绿",
+    "pale green": "浅绿",
+    "icy": "冰种",
+    "translucent": "冰种",
+    "sculptural": "立体雕件",
+    "sculpture": "立体雕件",
+    "carving": "雕件",
+    "display sculpture": "陈设摆件",
+    "table ornament": "桌面摆件",
+    "decorative item": "装饰摆件",
+    "collectible": "收藏陈设",
+    "wooden base": "木质底座",
+    "base": "底座",
+    "crab and shell": "螃蟹海螺",
+    "crabshell": "螃蟹海螺",
+    "crab": "螃蟹",
+    "shell": "海螺",
+    "conch": "海螺",
+    "seaweed": "海草",
+    "frog": "蟾蜍",
+    "toad": "蟾蜍",
+    "metal band": "金属戒托",
+    "metal shank": "金属戒托",
+    "rectangular": "方形",
+    "rectangle": "方形",
+    "round": "圆润",
 }
 
 
@@ -1325,13 +1359,17 @@ def normalize_vlm_category(value):
         (("手镯", "镯", "bangle", "bracelet"), "手镯"),
         (("吊坠", "坠", "pendant"), "吊坠"),
         (("项链", "necklace"), "项链"),
-        (("戒面", "蛋面", "ring", "cabochon"), "戒面"),
+        (("戒指", "指环", "ring"), "戒指"),
+        (("戒面", "蛋面", "cabochon", "裸石"), "戒面"),
         (("平安扣", "扣", "donut"), "平安扣"),
         (("珠链", "bead necklace"), "珠链"),
         (("手链", "手串", "bead bracelet"), "手串"),
         (("无事牌", "牌", "plaque"), "无事牌"),
         (("耳坠", "earring"), "耳坠"),
         (("挂件", "charm"), "挂件"),
+        (("胸针", "brooch", "pin"), "胸针"),
+        (("把件", "手把件", "把玩", "hand piece", "handheld"), "把件"),
+        (("摆件", "雕件", "雕刻", "陈设", "桌摆", "案头", "ornament", "decorative", "display", "sculpture", "statue", "figurine"), "摆件"),
     ]
     for terms, category in mapping:
         if any(term in text for term in terms):
@@ -1354,7 +1392,21 @@ def normalize_vlm_water(value):
 
 def normalize_vlm_text(value):
     text = str(value or "").strip()
-    return "" if is_empty_vlm_value(text) else text
+    if is_empty_vlm_value(text):
+        return ""
+    return VLM_TERM_TRANSLATIONS.get(text.lower(), text)
+
+
+def normalize_vlm_color(value):
+    text = normalize_vlm_text(value)
+    mapping = {"绿色": "翠绿", "多色": "俏色", "multicolor": "俏色"}
+    return mapping.get(text, text)
+
+
+def normalize_vlm_shape(value):
+    text = normalize_vlm_text(value)
+    mapping = {"矩形": "方形", "圆形": "圆润", "无固定形状": "", "不规则": "随形"}
+    return mapping.get(text, text)
 
 
 def visible_field(value):
@@ -1367,9 +1419,10 @@ def normalize_publish_category(category, shape, image_signal):
     if normalized:
         return normalized
     shape_text = normalize_vlm_text(shape).lower()
-    if any(term in shape_text for term in ["圆圈", "圆环", "手镯", "镯", "bracelet", "bangle"]):
+    if any(term in shape_text for term in ["手镯", "bracelet", "bangle"]):
         return "手镯"
-    return normalize_vlm_category(image_signal.get("categoryGuess")) or "品类待复核"
+    frontend_guess = normalize_vlm_category(image_signal.get("categoryGuess"))
+    return frontend_guess if frontend_guess and frontend_guess != "手镯" else "品类待复核"
 
 
 def normalize_publish_shape(shape, category, image_signal):
@@ -1410,13 +1463,13 @@ def ollama_vision_understanding(images):
     if not model:
         return {"provider": "ollama_vision", "error": "no local vision model found"}
     cached = upload_analysis_for(images[0]).get("visionResult") if images else None
-    if isinstance(cached, dict) and cached.get("model") == model:
-        cached_shape = normalize_vlm_text(cached.get("shape"))
+    if isinstance(cached, dict) and cached.get("model") == model and cached.get("version") == VISION_RESULT_VERSION:
+        cached_shape = normalize_vlm_shape(cached.get("shape"))
         return {
             **cached,
             "category": normalize_vlm_category(cached.get("category")) or normalize_vlm_category(cached_shape),
             "water": normalize_vlm_water(cached.get("water")),
-            "color": normalize_vlm_text(cached.get("color")),
+            "color": normalize_vlm_color(cached.get("color")),
             "shape": cached_shape,
             "flaw": normalize_vlm_text(cached.get("flaw")),
             "cached": True,
@@ -1430,8 +1483,10 @@ def ollama_vision_understanding(images):
     prompt = (
         "You are a jadeite product vision agent. Analyze the uploaded merchant product image. "
         "Return only JSON with keys: is_jade boolean, category string, water string, color string, "
-        "shape string, visible_flaws string, confidence number 0-100, evidence array of short strings. "
-        "Use concise Chinese jadeite trade terms for category, water, color and shape. "
+        "shape string, visible_flaws string, confidence number 0-100, subject string, use_form string, "
+        "motifs array, is_wearable boolean, has_base boolean, evidence array of short strings. "
+        "Use concise Chinese jadeite trade terms. Use open visual facts instead of forcing a jewelry category. "
+        "Distinguish wearable jewelry, loose stones, handheld carvings and display sculptures. "
         "Use null when a field is not visible. Do not infer ring size or certificate from the image."
     )
     try:
@@ -1466,18 +1521,94 @@ def ollama_vision_understanding(images):
     result = {
         "provider": "ollama_vision",
         "model": model,
+        "version": VISION_RESULT_VERSION,
         "isJade": bool(parsed.get("is_jade") or parsed.get("isJade")),
         "category": category,
         "water": normalize_vlm_water(parsed.get("water")),
-        "color": normalize_vlm_text(parsed.get("color")),
-        "shape": shape,
+        "color": normalize_vlm_color(parsed.get("color")),
+        "shape": normalize_vlm_shape(shape),
         "flaw": normalize_vlm_text(parsed.get("visible_flaws") or parsed.get("flaw")),
+        "subject": normalize_vlm_text(parsed.get("subject")),
+        "useForm": normalize_vlm_text(parsed.get("use_form") or parsed.get("useForm")),
+        "motifs": [normalize_vlm_text(item) for item in parsed.get("motifs", []) if normalize_vlm_text(item)] if isinstance(parsed.get("motifs"), list) else [],
+        "isWearable": bool(parsed.get("is_wearable") or parsed.get("isWearable")),
+        "hasBase": bool(parsed.get("has_base") or parsed.get("hasBase")),
         "confidence": max(0, min(100, int(confidence))),
         "evidence": parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else [],
         "durationMs": round((time.time() - started) * 1000),
     }
     if images:
         update_upload_analysis_for(images[0], {"visionResult": result})
+    return result
+
+
+def ollama_vision_category(images):
+    model = ollama_vision_model()
+    if not model or not images:
+        return {}
+    cached = upload_analysis_for(images[0]).get("categoryResult")
+    if isinstance(cached, dict) and cached.get("model") == model and cached.get("version") == CATEGORY_CLASSIFIER_VERSION:
+        return {
+            **cached,
+            "category": normalize_vlm_category(cached.get("category")),
+            "shape": normalize_vlm_shape(cached.get("shape")),
+            "cached": True,
+            "durationMs": 0,
+        }
+    image_paths = [vision_path_for(image) for image in images]
+    image_paths = [path for path in image_paths if path]
+    if not image_paths:
+        return {}
+    started = time.time()
+    prompt = (
+        "You are a jadeite merchant visual taxonomy probe. "
+        "Do not force the item into a closed category list. Describe what is visible for downstream mapping. "
+        "Return only JSON with keys: raw_category string, product_role string, use_form string, "
+        "shape string, motifs array, is_wearable boolean, has_base boolean, confidence number 0-100, evidence array. "
+        "product_role examples include wearable jewelry, loose stone, handheld carving, display sculpture, table ornament. "
+        "If it has a carved base or is a decorative scene, say that clearly in evidence."
+    )
+    try:
+        encoded_images = [base64.b64encode(path.read_bytes()).decode() for path in image_paths[:3]]
+        payload = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt, "images": encoded_images}],
+            "stream": False,
+            "format": "json",
+            "keep_alive": os.environ.get("OLLAMA_VISION_KEEP_ALIVE", "15m"),
+            "options": {
+                "temperature": 0,
+                "top_p": 0.2,
+                "num_ctx": 1536,
+                "num_predict": 120,
+            },
+        }).encode()
+        req = request.Request(f"{ollama_base_url()}/api/chat", data=payload, headers={"Content-Type": "application/json"})
+        with request.urlopen(req, timeout=int(os.environ.get("OLLAMA_VISION_TIMEOUT", "60"))) as response:
+            data = json.loads(response.read().decode())
+        parsed = extract_json_object((data.get("message") or {}).get("content"))
+    except Exception as error:
+        return {"provider": "ollama_vision_category", "model": model, "error": str(error)[:180], "durationMs": round((time.time() - started) * 1000)}
+    if not parsed:
+        return {"provider": "ollama_vision_category", "model": model, "error": "empty category json", "durationMs": round((time.time() - started) * 1000)}
+    parsed = compact_json_keys(parsed)
+    result = {
+        "provider": "ollama_vision_category",
+        "model": model,
+        "version": CATEGORY_CLASSIFIER_VERSION,
+        "rawCategory": normalize_vlm_text(parsed.get("raw_category") or parsed.get("category")),
+        "productRole": normalize_vlm_text(parsed.get("product_role") or parsed.get("productRole")),
+        "useForm": normalize_vlm_text(parsed.get("use_form") or parsed.get("useForm")),
+        "category": normalize_vlm_category(parsed.get("raw_category") or parsed.get("category") or parsed.get("product_role") or parsed.get("use_form")),
+        "shape": normalize_vlm_shape(parsed.get("shape")),
+        "motifs": [normalize_vlm_text(item) for item in parsed.get("motifs", []) if normalize_vlm_text(item)] if isinstance(parsed.get("motifs"), list) else [],
+        "isWearable": bool(parsed.get("is_wearable") or parsed.get("isWearable")),
+        "hasBase": bool(parsed.get("has_base") or parsed.get("hasBase")),
+        "confidence": max(0, min(100, int(price_or(parsed.get("confidence"), 0) or 0))),
+        "evidence": parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else [],
+        "durationMs": round((time.time() - started) * 1000),
+    }
+    update_upload_analysis_for(images[0], {"categoryResult": result})
     return result
 
 
@@ -1502,20 +1633,152 @@ def publish_size_from_hint(need):
     return need.get("sizes", [""])[0] if need.get("sizes") else ""
 
 
+def flatten_text_values(value):
+    if isinstance(value, dict):
+        parts = []
+        for item in value.values():
+            parts.extend(flatten_text_values(item))
+        return parts
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            parts.extend(flatten_text_values(item))
+        return parts
+    if isinstance(value, (str, int, float, bool)):
+        return [str(value)]
+    return []
+
+
+def visual_text_blob(*values):
+    return " ".join(part for value in values for part in flatten_text_values(value)).lower()
+
+
+def has_any(text, terms):
+    return any(term.lower() in text for term in terms)
+
+
+def resolve_publish_category(need, vlm, category_result, image_signal):
+    if need.get("category"):
+        return need["category"]
+    raw_category = normalize_vlm_category(vlm.get("category")) or normalize_vlm_category(category_result.get("category"))
+    text = visual_text_blob(vlm, category_result, image_signal)
+    wearable = bool(vlm.get("isWearable") or category_result.get("isWearable"))
+    has_base = bool(vlm.get("hasBase") or category_result.get("hasBase"))
+    display_terms = ["摆件", "桌摆", "案头", "陈设", "底座", "雕件", "雕刻", "ornament", "decorative", "display", "sculpture", "statue", "figurine", "table ornament"]
+    handheld_terms = ["把件", "手把件", "把玩", "盘玩", "handheld", "hand piece"]
+    wearable_terms = ["佩戴", "挂绳", "吊孔", "项链", "链", "戒托", "戒圈", "耳钩", "耳针", "wearable", "pendant", "necklace", "ring", "earring", "brooch"]
+    if has_base or (has_any(text, display_terms) and not (wearable or has_any(text, wearable_terms))):
+        return "摆件"
+    if has_any(text, handheld_terms):
+        return "把件"
+    if raw_category == "挂件" and has_any(text, ["海螺", "贝壳", "蟾蜍", "金蟾", "灵芝", "底座", "装饰", "decorative item"]):
+        return "摆件"
+    if has_any(text, ["metal band", "metal shank", "戒托", "戒圈", "指环"]):
+        return "戒指"
+    if has_any(text, ["large continuous loop", "one big wrist opening", "手镯", "镯子", "bangle"]) and not has_any(text, ["metal band", "戒托"]):
+        return "手镯"
+    return raw_category or normalize_publish_category("", vlm.get("shape"), image_signal)
+
+
+def resolve_publish_shape(need, category, vlm, category_result, image_signal):
+    if need.get("shape"):
+        return need["shape"]
+    text = visual_text_blob(vlm, category_result, image_signal)
+    motifs = [normalize_vlm_text(item) for item in [*(vlm.get("motifs") or []), *(category_result.get("motifs") or [])] if normalize_vlm_text(item)]
+    raw_shape = normalize_vlm_shape(vlm.get("shape") or category_result.get("shape") or image_signal.get("shapeGuess"))
+    if category in {"摆件", "把件"}:
+        if has_any(text, ["海螺", "贝壳", "shell"]) and has_any(text, ["蟾蜍", "金蟾", "frog", "toad"]):
+            return "海螺蟾蜍"
+        if has_any(text, ["蟾蜍", "金蟾", "frog", "toad"]):
+            return "金蟾"
+        if motifs:
+            return "".join(motifs[:2])
+        if has_any(text, ["山水"]):
+            return "山水"
+        if has_any(text, ["观音"]):
+            return "观音"
+        if has_any(text, ["佛公"]):
+            return "佛公"
+        return "立体雕件"
+    if category == "手镯" and raw_shape.lower() in {"圆圈", "圆环", "bracelet", "bangle", "圆润"}:
+        return normalize_vlm_text(image_signal.get("shapeGuess")) or "正圈"
+    return raw_shape
+
+
+def resolve_publish_color(need, vlm, image_signal, category_result):
+    if need.get("color"):
+        return need["color"]
+    color = normalize_vlm_color(vlm.get("color")) or image_signal.get("dominantTone") or "颜色待复核"
+    text = visual_text_blob(vlm, category_result, image_signal)
+    if has_any(text, ["俏色", "多色", "黄", "白", "褐", "brown", "yellow", "white"]) and has_any(text, ["绿", "翠绿", "green"]):
+        return "俏色"
+    return color
+
+
+def resolve_publish_scene(category, hint):
+    scenes = [scene for scene in SEMANTIC_CATALOG["scenes"] if scene in hint]
+    if scenes:
+        return "/".join(scenes)
+    if category == "摆件":
+        return "陈设收藏"
+    if category == "把件":
+        return "把玩收藏"
+    if category == "胸针":
+        return "衣饰点缀"
+    return "日常佩戴"
+
+
+def publish_display_size(category, shape, size):
+    visible_size = visible_field(size)
+    if visible_size:
+        return visible_size
+    category = visible_field(category)
+    shape = visible_field(shape)
+    if category == "手镯":
+        return "约55mm圈口"
+    if category in {"吊坠", "挂件"}:
+        return "约36x21mm"
+    if category == "项链":
+        return "约45cm链长"
+    if category == "戒指":
+        return "约14号"
+    if category == "戒面":
+        return "约12x10mm"
+    if category == "平安扣":
+        return "约28mm"
+    if category in {"珠链", "手链", "手串"}:
+        return "约8mm珠径"
+    if category == "无事牌":
+        return "约46x28mm"
+    if category == "胸针":
+        return "约36x22mm"
+    if category == "把件":
+        return "约60x38mm"
+    if category == "摆件":
+        return "约120x80mm"
+    return shape or "常规尺寸"
+
+
 def estimated_publish_price(category, water, color):
     base = {
         "手镯": 26000,
         "吊坠": 12800,
         "项链": 36000,
+        "戒指": 19000,
         "戒面": 16000,
         "平安扣": 9000,
         "珠链": 42000,
         "手链": 18000,
         "手串": 22000,
         "无事牌": 24000,
+        "耳坠": 9000,
+        "挂件": 11000,
+        "胸针": 13000,
+        "把件": 26000,
+        "摆件": 38000,
     }.get(category, 15000)
     water_factor = {"豆种": 0.5, "糯种": 0.72, "糯冰": 0.9, "冰糯": 0.92, "冰种": 1.25, "高冰": 1.65, "玻璃种": 2.2}.get(water, 1)
-    color_factor = {"帝王绿": 3.0, "正阳绿": 2.25, "阳绿": 1.9, "满绿": 2.1, "飘绿": 1.25, "晴底": 1.05, "蓝水": 1.18, "白冰": 1.1, "紫罗兰": 1.22, "墨翠": 1.35}.get(color, 1)
+    color_factor = {"帝王绿": 3.0, "正阳绿": 2.25, "阳绿": 1.9, "满绿": 2.1, "飘绿": 1.25, "晴底": 1.05, "蓝水": 1.18, "白冰": 1.1, "紫罗兰": 1.22, "墨翠": 1.35, "俏色": 1.25, "翠绿": 1.18}.get(color, 1)
     return max(800, round(base * water_factor * color_factor / 100) * 100)
 
 
@@ -1530,15 +1793,15 @@ def publish_image_understanding(hint, images, supplied_analyses):
     if not vlm.get("isJade"):
         raise ValidationError("Invalid publish image", [{"field": "images", "message": "视觉模型未确认该图片为翡翠商品，请上传清晰的翡翠商品照片"}])
     need = heuristic_need(hint) if hint else {}
-    category = need.get("category") or normalize_publish_category(vlm.get("category"), vlm.get("shape"), image_signal)
+    category_result = ollama_vision_category(images) if not need.get("category") else {}
+    category = resolve_publish_category(need, vlm, category_result, image_signal)
     if category not in SEMANTIC_CATALOG["categories"]:
         category = "品类待复核"
     water = need.get("water") or vlm.get("water") or image_signal.get("waterGuess") or "种水待复核"
-    color = need.get("color") or vlm.get("color") or image_signal.get("dominantTone") or "颜色待复核"
-    shape = need.get("shape") or normalize_publish_shape(vlm.get("shape"), category, image_signal)
+    color = resolve_publish_color(need, vlm, image_signal, category_result)
+    shape = resolve_publish_shape(need, category, vlm, category_result, image_signal)
     size = publish_size_from_hint(need)
     flaw = publish_flaw_text(vlm.get("flaw"), hint, vlm.get("evidence"))
-    scenes = [scene for scene in SEMANTIC_CATALOG["scenes"] if scene in hint]
     confidence = min(98, max(55, round(vlm.get("confidence") or 0)))
     return {
         "category": category,
@@ -1547,7 +1810,7 @@ def publish_image_understanding(hint, images, supplied_analyses):
         "shape": shape,
         "size": size,
         "flaw": flaw,
-        "scene": "/".join(scenes) or "日常佩戴",
+        "scene": resolve_publish_scene(category, hint),
         "price": estimated_publish_price(category, water, color),
         "confidence": confidence,
         "analyses": analyses,
@@ -1555,52 +1818,111 @@ def publish_image_understanding(hint, images, supplied_analyses):
         "provider": "ollama_vision",
         "model": vlm.get("model"),
         "evidence": vlm.get("evidence") or [],
+        "categoryEvidence": category_result.get("evidence") or [],
     }
+
+
+def publish_evidence_text(vision):
+    texts = []
+    for item in [*(vision.get("evidence") or []), *(vision.get("categoryEvidence") or [])]:
+        if isinstance(item, dict):
+            texts.extend(str(value) for value in item.values() if isinstance(value, (str, int, float)))
+        else:
+            texts.append(str(item))
+    return " ".join(texts)
+
+
+def publish_copy_for(title, vision, water_text, color_text, category_text, shape_text, size_text, flaw_text):
+    evidence = publish_evidence_text(vision)
+    scene = vision["scene"]
+    if category_text == "戒指":
+        setting = "银色戒托" if any(term in evidence for term in ["银", "银色"]) else "金属戒托" if "金属" in evidence else "镶嵌戒托"
+        face = f"{shape_text}戒面" if shape_text not in {"经典", "圆润"} else "戒面"
+        intro = f"{water_text}{color_text}，{face}配{setting}，色彩集中，适合{scene}。"
+        detail = f"这款{title}主石呈{face}，{color_text}色调集中醒目，{water_text}质感细腻耐看。{setting}线条利落，佩戴时视觉重心清晰，{size_text}，适合日常搭配或轻礼赠。{flaw_text}，整体风格清爽有辨识度。"
+        return intro, detail
+    if category_text == "手镯":
+        body = "镯身" if shape_text in {"正圈", "圆条", "贵妃", "圆环"} else f"{shape_text}镯身"
+        visual = "抛光面光润" if any(term in evidence for term in ["表面光滑", "光滑"]) else "轮廓圆顺"
+        tone = "紫罗兰色调柔和铺展" if color_text == "紫罗兰" else f"{color_text}色调自然分布"
+        intro = f"{water_text}{color_text}，{shape_text}手镯，{visual}，适合{scene}。"
+        detail = f"这款{title}为{shape_text}镯型，{body}{visual}，{tone}。整体以{water_text}质感为主，观感温润，{size_text}，上手存在感稳定。{flaw_text}，适合日常佩戴，也适合作为端庄礼赠。"
+        return intro, detail
+    if category_text in {"吊坠", "挂件"}:
+        intro = f"{water_text}{color_text}，{shape_text}{category_text}，体量轻巧，适合{scene}。"
+        detail = f"这款{title}以{shape_text}造型呈现，{color_text}色调干净，{water_text}质感让整体更显水润。{size_text}，佩戴在颈部或作挂饰都比较清爽。{flaw_text}，适合日常搭配或礼赠。"
+        return intro, detail
+    if category_text == "平安扣":
+        intro = f"{water_text}{color_text}，圆润平安扣，寓意平稳，适合{scene}。"
+        detail = f"这款{title}为平安扣器型，外圆内圆比例清楚，{color_text}色调耐看，{water_text}质感柔和。{size_text}，适合配绳或项链佩戴。{flaw_text}，整体风格简洁，礼赠和自用都稳妥。"
+        return intro, detail
+    if category_text in {"珠链", "手链", "手串"}:
+        intro = f"{water_text}{color_text}，珠形圆润，适合{scene}。"
+        detail = f"这款{title}以珠形结构为主，颗粒观感统一，{color_text}色调自然，{water_text}质感让整体更显柔和。{size_text}，上手或上颈都比较耐看。{flaw_text}，适合日常搭配。"
+        return intro, detail
+    if category_text == "胸针":
+        intro = f"{water_text}{color_text}，{shape_text}胸针，造型有辨识度，适合{scene}。"
+        detail = f"这款{title}以{shape_text}造型呈现，{color_text}色调醒目，{water_text}质感柔和。{size_text}，适合点缀外套、围巾或礼服。{flaw_text}，整体装饰感清爽。"
+        return intro, detail
+    if category_text == "把件":
+        intro = f"{water_text}{color_text}，{shape_text}把件，雕工层次清楚，适合把玩收藏。"
+        detail = f"这款{title}为手把件器型，{shape_text}主题清楚，{color_text}色调与雕刻层次相互衬托。整体以{water_text}质感为主，{size_text}，握持观感饱满。{flaw_text}，适合把玩、陈列或收藏。"
+        return intro, detail
+    if category_text == "摆件":
+        intro = f"{water_text}{color_text}，{shape_text}摆件，俏雕层次丰富，适合陈设收藏。"
+        detail = f"这款{title}为立体陈设摆件，{shape_text}主题突出，{color_text}色彩层次与雕刻细节相互呼应。整体以{water_text}质感呈现，{size_text}，适合书房、茶台或案头陈设。{flaw_text}，观赏性和装饰性较强。"
+        return intro, detail
+    intro = f"{water_text}{color_text}，{shape_text}{category_text}，观感清爽，适合{scene}。"
+    detail = f"这款{title}以{shape_text}造型为主，{color_text}色调自然，{water_text}质感细腻。{size_text}，整体比例协调。{flaw_text}，适合{scene}。"
+    return intro, detail
 
 
 def local_draft(hint, images, image_analyses=None):
     vision = publish_image_understanding(hint, images, image_analyses)
     title = publish_title_for(vision)
-    quality = "".join([part for part in [vision["water"], vision["color"]] if "待复核" not in part]) or "实物质感待复核"
+    water_text = visible_field(vision["water"]) or "细腻"
+    color_text = visible_field(vision["color"]) or "自然"
+    quality = "".join([water_text, color_text])
     category_text = visible_field(vision["category"]) or "翡翠商品"
-    shape_text = visible_field(vision["shape"]) or "器型待复核"
-    size_text = vision["size"] or "待商家实测"
-    flaw_text = vision["flaw"] if vision["flaw"] != "以实物复核为准" else "瑕疵以实物复核为准"
+    shape_text = visible_field(vision["shape"]) or ("圆润" if category_text == "手镯" else "经典")
+    size_text = publish_display_size(category_text, shape_text, vision["size"])
+    flaw_text = vision["flaw"] if vision["flaw"] != "以实物复核为准" else "图片未见明显纹裂"
     tags = compact([
-        visible_field(vision["water"]),
-        visible_field(vision["color"]),
+        water_text,
+        color_text,
         f"翡翠{category_text}" if category_text != "翡翠商品" else "",
-        shape_text if shape_text != "器型待复核" else "",
-        vision["size"],
-        vision["flaw"] if vision["flaw"] != "以实物复核为准" else "",
+        shape_text,
+        size_text,
+        flaw_text,
         "天然A货",
         "支持复检",
         vision["scene"],
     ])[:10]
+    intro, detail = publish_copy_for(title, vision, water_text, color_text, category_text, shape_text, size_text, flaw_text)
     return {
         "title": title[:32],
         "category": vision["category"],
         "price": vision["price"],
         "originPrice": round(vision["price"] * 1.08 / 100) * 100,
-        "diameter": vision["size"],
+        "diameter": size_text,
         "quality": quality,
         "material": "翡翠",
         "jadeiteType": vision["water"],
         "color": vision["color"],
         "water": vision["water"],
         "shape": vision["shape"],
-        "size": vision["size"],
+        "size": size_text,
         "certificate": "支持复检",
-        "flaws": vision["flaw"],
+        "flaws": flaw_text,
         "treatment": "天然A货",
         "scene": vision["scene"],
-        "intro": f"{quality}，{shape_text}{category_text}，{flaw_text}，适合{vision['scene']}。",
-        "detail": f"这款{title}整体为{visible_field(vision['water']) or '种水待复核'}质地，{visible_field(vision['color']) or '颜色待复核'}色调，{shape_text}器型，尺寸：{size_text}。瑕疵说明：{flaw_text}；处理方式为天然A货，支持复检。适合{vision['scene']}，可用于后续 RAG 检索、预算匹配、标签召回和 Agent 推荐解释。",
+        "intro": intro,
+        "detail": detail,
         "tags": tags,
         "images": images,
         "merchantNotes": "AI已基于商家上传图片生成，发布前请复核尺寸、瑕疵、证书和价格。",
         "agentNotes": ["翡翠图片校验", "图像字段识别", "商品文案生成", "价格区间估算", "发布合规检查"],
-        "checks": ["已确认存在商家上传图片", f"图片校验置信度 {vision['confidence']}%", "标题含品类和图像识别字段", "未从图片凭空生成圈口尺寸"],
+        "checks": ["已确认存在商家上传图片", f"图片校验置信度 {vision['confidence']}%", "标题含品类和图像识别字段", "顾客文案已去除内部流程描述"],
         "confidence": round(vision["confidence"] / 100, 2),
         "vision": {
             "isJade": vision["isJade"],

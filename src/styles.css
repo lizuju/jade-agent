@@ -995,7 +995,7 @@ button:disabled {
 
 .upload-grid img,
 .upload-grid .image-fallback,
-.upload-grid button,
+.upload-preview,
 .upload-add {
   width: 100%;
   aspect-ratio: 0.82;
@@ -1003,7 +1003,18 @@ button:disabled {
   object-fit: cover;
 }
 
-.upload-grid button,
+.upload-preview {
+  position: relative;
+  overflow: hidden;
+  background: #f5f7f6;
+}
+
+.upload-preview img,
+.upload-preview .image-fallback {
+  height: 100%;
+  border-radius: inherit;
+}
+
 .upload-add {
   display: grid;
   place-items: center;
@@ -1014,7 +1025,23 @@ button:disabled {
   cursor: pointer;
 }
 
-.upload-grid button:disabled {
+.upload-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(17, 32, 26, 0.78);
+  box-shadow: 0 4px 12px rgba(17, 32, 26, 0.22);
+  cursor: pointer;
+}
+
+.upload-remove:disabled {
   cursor: progress;
   opacity: 0.76;
 }

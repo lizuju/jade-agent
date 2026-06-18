@@ -4,7 +4,7 @@ import re
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 PRODUCT_STATUSES = {"listed", "draft", "unlisted"}
 LIFECYCLE_STATUSES = {"listed", "draft", "unlisted", "deleted"}
-CATEGORIES = {"手镯", "吊坠", "项链", "戒面", "平安扣", "珠链", "手链", "手串", "无事牌", "耳坠", "挂件", "胸针", "把件", "摆件"}
+CATEGORIES = {"手镯", "吊坠", "项链", "戒指", "戒面", "平安扣", "珠链", "手链", "手串", "无事牌", "耳坠", "挂件", "胸针", "把件", "摆件"}
 LEAD_STATUSES = {"new", "contacted"}
 
 
@@ -60,7 +60,7 @@ def validate_product_payload(body):
     if len(title) < 4 or len(title) > 80:
         details.append({"field": "title", "message": "商品标题需要 4 到 80 个字"})
     if category not in CATEGORIES:
-        details.append({"field": "category", "message": "商品品类必须是手镯、吊坠、项链、戒面、平安扣、珠链、手链、手串、无事牌、耳坠、挂件、胸针、把件或摆件"})
+        details.append({"field": "category", "message": "商品品类必须是手镯、吊坠、项链、戒指、戒面、平安扣、珠链、手链、手串、无事牌、耳坠、挂件、胸针、把件或摆件"})
     if price < 100 or price > 5_000_000:
         details.append({"field": "price", "message": "价格需要在 100 到 5,000,000 元之间"})
     if status not in PRODUCT_STATUSES:

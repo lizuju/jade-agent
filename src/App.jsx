@@ -22,7 +22,8 @@ import {
   Store,
   Trash2,
   User,
-  Wand2
+  Wand2,
+  X
 } from "lucide-react";
 import { api, maskEmail, money } from "./api.js";
 
@@ -259,7 +260,11 @@ function readImageForUpload(file) {
         const avgG = totalG / sampleCount;
         const avgB = totalB / sampleCount;
         const name = file.name.toLowerCase();
-        const categoryGuess = name.includes("pendant") || name.includes("吊坠") || image.height > image.width * 1.18 ? "吊坠" : "手镯";
+        const categoryGuess = name.includes("pendant") || name.includes("吊坠") || image.height > image.width * 1.18
+          ? "吊坠"
+          : name.includes("ring") || name.includes("戒指") || name.includes("指环")
+            ? "戒指"
+            : "";
         const dominantTone = purpleRatio > 0.12 && greenRatio > 0.08 ? "春彩" : purpleRatio > 0.12 ? "紫罗兰" : blueRatio > 0.26 ? "蓝水" : greenRatio > 0.34 ? "飘绿" : paleRatio > 0.35 && avgG >= avgR ? "晴底" : paleRatio > 0.35 ? "白冰" : avgG > avgR && avgG > avgB ? "绿色系" : "浅色";
         const waterGuess = paleRatio > 0.42 ? "冰种" : paleRatio > 0.24 ? "糯冰" : "糯种";
         const jadeScore = Math.min(99, Math.round(greenRatio * 62 + paleRatio * 32 + blueRatio * 16 + purpleRatio * 70 + (avgG >= avgR && avgG >= avgB ? 14 : 0)));
@@ -288,7 +293,7 @@ function readImageForUpload(file) {
             categoryGuess,
             dominantTone,
             waterGuess,
-            shapeGuess: categoryGuess === "手镯" ? "正圈" : "水滴",
+            shapeGuess: categoryGuess === "手镯" ? "正圈" : categoryGuess === "吊坠" ? "水滴" : "",
           }
         });
       };
@@ -727,6 +732,15 @@ function PublishGuide({ state, setState, go }) {
     }
   }
 
+  function removeImage(index) {
+    const nextImages = images.filter((_, itemIndex) => itemIndex !== index);
+    const nextAnalyses = imageAnalyses.filter((_, itemIndex) => itemIndex !== index);
+    setImages(nextImages);
+    setImageAnalyses(nextAnalyses);
+    setNotice("");
+    setState((current) => ({ ...current, publishImages: nextImages, publishImageAnalyses: nextAnalyses, draft: null }));
+  }
+
   async function generateDraft() {
     if (loading || uploading) return;
     if (!images.length) {
@@ -760,7 +774,14 @@ function PublishGuide({ state, setState, go }) {
       <section className="upload-card">
         <div className="step-title"><span>1.</span><strong>上传商品图片</strong><small>上传清晰的翡翠图片，AI将先校验图片再生成商品文案</small></div>
         <div className="upload-grid">
-          {images.map((image) => <SafeImage key={typeof image === "string" ? image : image?.url} src={image} alt="上传商品" />)}
+          {images.map((image, index) => (
+            <div className="upload-preview" key={`${typeof image === "string" ? image : image?.url}-${index}`}>
+              <SafeImage src={image} alt="上传商品" />
+              <button type="button" className="upload-remove" onClick={() => removeImage(index)} aria-label="移除图片" disabled={loading || uploading}>
+                <X size={14} />
+              </button>
+            </div>
+          ))}
           <label className="upload-add">
             <ImagePlus size={28} />
             <span>{uploading ? "上传中" : "上传图片"}</span>
@@ -891,7 +912,14 @@ function EditInfo({ state, setState, go }) {
         body: JSON.stringify({ ...draft, status: "listed" })
       });
       const appState = await api("/api/app-state");
-      setState((current) => ({ ...current, ...appState, selectedProductId: result.product.id }));
+      setState((current) => ({
+        ...current,
+        ...appState,
+        selectedProductId: result.product.id,
+        draft: null,
+        publishImages: null,
+        publishImageAnalyses: []
+      }));
       go("products");
     } catch (error) {
       setNotice(`发布失败：${error.message}`);
@@ -1073,7 +1101,7 @@ function EditProduct({ state, setState, go }) {
 
   useEffect(() => {
     if (selected) setDraft(selected);
-  }, [selected?.id, selected?.status]);
+  }, [selected]);
 
   async function save() {
     if (saving || statusChanging) return;
