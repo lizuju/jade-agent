@@ -97,6 +97,13 @@ VLM_TERM_TRANSLATIONS = {
     "shell": "海螺",
     "conch": "海螺",
     "seaweed": "海草",
+    "flower": "花",
+    "flowers": "花",
+    "leaf": "叶",
+    "leaves": "叶",
+    "flowers leaves": "花叶",
+    "flowersleaves": "花叶",
+    "floral branch": "花叶",
     "frog": "蟾蜍",
     "toad": "蟾蜍",
     "metal band": "金属戒托",
@@ -1386,7 +1393,19 @@ def normalize_vlm_water(value):
     text = str(value or "").strip()
     if is_empty_vlm_value(text):
         return ""
-    mapping = {"糯": "糯种", "冰": "冰种", "豆": "豆种", "玻璃": "玻璃种", "clear": "冰种"}
+    mapping = {
+        "糯": "糯种",
+        "waxy": "糯种",
+        "冰": "冰种",
+        "icy": "冰种",
+        "ice": "冰种",
+        "translucent": "冰种",
+        "clear": "冰种",
+        "豆": "豆种",
+        "bean": "豆种",
+        "玻璃": "玻璃种",
+        "glassy": "玻璃种",
+    }
     return mapping.get(text.lower(), text)
 
 
@@ -1394,7 +1413,9 @@ def normalize_vlm_text(value):
     text = str(value or "").strip()
     if is_empty_vlm_value(text):
         return ""
-    return VLM_TERM_TRANSLATIONS.get(text.lower(), text)
+    spaced = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
+    translated = VLM_TERM_TRANSLATIONS.get(spaced.lower()) or VLM_TERM_TRANSLATIONS.get(spaced.lower().replace(" ", ""))
+    return translated or text
 
 
 def normalize_vlm_color(value):
@@ -1684,7 +1705,7 @@ def resolve_publish_shape(need, category, vlm, category_result, image_signal):
     if need.get("shape"):
         return need["shape"]
     text = visual_text_blob(vlm, category_result, image_signal)
-    motifs = [normalize_vlm_text(item) for item in [*(vlm.get("motifs") or []), *(category_result.get("motifs") or [])] if normalize_vlm_text(item)]
+    motifs = compact([normalize_vlm_text(item) for item in [*(vlm.get("motifs") or []), *(category_result.get("motifs") or [])] if normalize_vlm_text(item)])
     raw_shape = normalize_vlm_shape(vlm.get("shape") or category_result.get("shape") or image_signal.get("shapeGuess"))
     if category in {"摆件", "把件"}:
         if has_any(text, ["海螺", "贝壳", "shell"]) and has_any(text, ["蟾蜍", "金蟾", "frog", "toad"]):
@@ -1693,6 +1714,8 @@ def resolve_publish_shape(need, category, vlm, category_result, image_signal):
             return "金蟾"
         if motifs:
             return "".join(motifs[:2])
+        if raw_shape and raw_shape not in {"圆润", "经典", "立体雕件"}:
+            return raw_shape
         if has_any(text, ["山水"]):
             return "山水"
         if has_any(text, ["观音"]):
@@ -1709,6 +1732,8 @@ def resolve_publish_color(need, vlm, image_signal, category_result):
     if need.get("color"):
         return need["color"]
     color = normalize_vlm_color(vlm.get("color")) or image_signal.get("dominantTone") or "颜色待复核"
+    if color in SEMANTIC_CATALOG["waters"]:
+        return ""
     text = visual_text_blob(vlm, category_result, image_signal)
     if has_any(text, ["俏色", "多色", "黄", "白", "褐", "brown", "yellow", "white"]) and has_any(text, ["绿", "翠绿", "green"]):
         return "俏色"
@@ -1797,7 +1822,7 @@ def publish_image_understanding(hint, images, supplied_analyses):
     category = resolve_publish_category(need, vlm, category_result, image_signal)
     if category not in SEMANTIC_CATALOG["categories"]:
         category = "品类待复核"
-    water = need.get("water") or vlm.get("water") or image_signal.get("waterGuess") or "种水待复核"
+    water = need.get("water") or normalize_vlm_water(vlm.get("water")) or image_signal.get("waterGuess") or "种水待复核"
     color = resolve_publish_color(need, vlm, image_signal, category_result)
     shape = resolve_publish_shape(need, category, vlm, category_result, image_signal)
     size = publish_size_from_hint(need)
@@ -1880,16 +1905,18 @@ def publish_copy_for(title, vision, water_text, color_text, category_text, shape
 def local_draft(hint, images, image_analyses=None):
     vision = publish_image_understanding(hint, images, image_analyses)
     title = publish_title_for(vision)
-    water_text = visible_field(vision["water"]) or "细腻"
-    color_text = visible_field(vision["color"]) or "自然"
-    quality = "".join([water_text, color_text])
+    visible_water = visible_field(vision["water"])
+    visible_color = visible_field(vision["color"])
+    water_text = visible_water or "细腻"
+    color_text = visible_color or "自然"
+    quality = "".join(compact([visible_water, visible_color])) or water_text
     category_text = visible_field(vision["category"]) or "翡翠商品"
     shape_text = visible_field(vision["shape"]) or ("圆润" if category_text == "手镯" else "经典")
     size_text = publish_display_size(category_text, shape_text, vision["size"])
     flaw_text = vision["flaw"] if vision["flaw"] != "以实物复核为准" else "图片未见明显纹裂"
     tags = compact([
-        water_text,
-        color_text,
+        visible_water,
+        visible_color,
         f"翡翠{category_text}" if category_text != "翡翠商品" else "",
         shape_text,
         size_text,

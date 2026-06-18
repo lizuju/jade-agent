@@ -1,0 +1,200 @@
+{
+  "buyerMatch": [
+    {
+      "id": "buyer_pingankou_20k_clean",
+      "need": "冰种平安扣 预算2万 无纹无裂",
+      "expect": {
+        "mode": "match",
+        "parsed": {
+          "category": "平安扣",
+          "budget": 20000,
+          "water": "冰种",
+          "mustHaveContains": ["无纹裂"]
+        },
+        "topProduct": {
+          "category": "平安扣",
+          "minPrice": 14000,
+          "maxPrice": 22400
+        }
+      }
+    },
+    {
+      "id": "buyer_emperor_green_bangle_100k",
+      "need": "10万预算 帝王绿手镯 55圈口 微瑕",
+      "expect": {
+        "mode": "match",
+        "parsed": {
+          "category": "手镯",
+          "budget": 100000,
+          "color": "帝王绿",
+          "sizesContains": ["55mm"],
+          "mustHaveContains": ["微瑕"]
+        },
+        "topProduct": {
+          "category": "手镯",
+          "titleContains": ["帝王绿"],
+          "maxPrice": 112000
+        }
+      }
+    },
+    {
+      "id": "buyer_necklace_70k",
+      "need": "我要7w的项链",
+      "expect": {
+        "mode": "match",
+        "parsed": {
+          "category": "项链",
+          "budget": 70000
+        },
+        "topProduct": {
+          "category": "项链",
+          "maxPrice": 78400
+        }
+      }
+    },
+    {
+      "id": "buyer_service_greeting",
+      "need": "你好",
+      "expect": {
+        "mode": "customer_service",
+        "productCount": 0,
+        "replyContains": ["翡翠", "预算"]
+      }
+    }
+  ],
+  "merchantPublish": [
+    {
+      "id": "publish_display_sculpture_crab_shell",
+      "vision": {
+        "category": "挂件",
+        "water": "icy",
+        "color": "multicolored",
+        "shape": "",
+        "flaw": "",
+        "evidence": ["wooden base", "display sculpture", "jadeite material"],
+        "motifs": ["crab", "shell"],
+        "isWearable": false,
+        "hasBase": true,
+        "confidence": 95
+      },
+      "categoryResult": {
+        "rawCategory": "decorative item",
+        "productRole": "display sculpture",
+        "useForm": "table ornament",
+        "motifs": ["crab", "shell"],
+        "isWearable": false,
+        "hasBase": true,
+        "evidence": ["wooden base", "crab and shell"]
+      },
+      "imageSignal": {},
+      "expect": {
+        "category": "摆件",
+        "color": "俏色",
+        "shape": "螃蟹海螺",
+        "scene": "陈设收藏",
+        "titleContains": ["摆件"],
+        "detailContains": ["立体陈设", "案头"],
+        "detailExcludes": ["佩戴在颈部", "RAG", "待商家实测"]
+      }
+    },
+    {
+      "id": "publish_rectangular_jade_ring",
+      "vision": {
+        "category": "ring",
+        "water": "糯种",
+        "color": "green",
+        "shape": "rectangular",
+        "flaw": "",
+        "evidence": ["metal band", "green jadeite"],
+        "motifs": [],
+        "isWearable": true,
+        "hasBase": false,
+        "confidence": 90
+      },
+      "categoryResult": {
+        "rawCategory": "ring",
+        "productRole": "wearable jewelry",
+        "shape": "rectangular",
+        "isWearable": true,
+        "hasBase": false,
+        "evidence": ["metal band"]
+      },
+      "imageSignal": {},
+      "expect": {
+        "category": "戒指",
+        "color": "翠绿",
+        "shape": "方形",
+        "scene": "日常佩戴",
+        "titleContains": ["戒指"],
+        "detailContains": ["戒托"],
+        "detailExcludes": ["摆件", "RAG"]
+      }
+    },
+    {
+      "id": "publish_floral_handheld_carving",
+      "vision": {
+        "category": "handheld carving",
+        "water": "icy",
+        "color": "icy",
+        "shape": "",
+        "flaw": "",
+        "evidence": ["Floral Branch", "Flowers", "Leaves"],
+        "motifs": ["FlowersLeaves"],
+        "isWearable": false,
+        "hasBase": false,
+        "confidence": 90
+      },
+      "categoryResult": {
+        "rawCategory": "handheld carving",
+        "productRole": "handheld carving",
+        "motifs": ["flowers leaves"],
+        "isWearable": false,
+        "hasBase": false,
+        "evidence": ["flowers", "leaves"]
+      },
+      "imageSignal": {},
+      "expect": {
+        "category": "把件",
+        "water": "冰种",
+        "shape": "花叶",
+        "quality": "冰种",
+        "titleExcludes": ["Flowers", "Leaves", "冰种冰种"],
+        "detailExcludes": ["Flowers", "Leaves", "冰种冰种", "RAG"]
+      }
+    },
+    {
+      "id": "publish_floral_shape_field_normalization",
+      "vision": {
+        "category": "handheld carving",
+        "water": "icy",
+        "color": "icy",
+        "shape": "FlowersLeaves",
+        "flaw": "",
+        "evidence": ["pale green jadeite carving"],
+        "motifs": [],
+        "isWearable": false,
+        "hasBase": false,
+        "confidence": 90
+      },
+      "categoryResult": {
+        "rawCategory": "handheld carving",
+        "productRole": "handheld carving",
+        "motifs": [],
+        "isWearable": false,
+        "hasBase": false,
+        "evidence": ["handheld carving"]
+      },
+      "imageSignal": {},
+      "expect": {
+        "category": "把件",
+        "water": "冰种",
+        "shape": "花叶",
+        "quality": "冰种",
+        "titleExcludes": ["FlowersLeaves", "冰种冰种"],
+        "introExcludes": ["FlowersLeaves", "冰种冰种"],
+        "detailExcludes": ["FlowersLeaves", "冰种冰种", "RAG"]
+      }
+    }
+  ],
+  "merchantPublishLive": []
+}
