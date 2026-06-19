@@ -121,6 +121,9 @@ Image strategy:
 - Merchants upload images to `public/uploads`.
 - Product records keep image URLs, and product detail, product management, and RAG documents reuse those fields.
 - Vision recognition prefers a local Ollama vision model such as `qwen2.5vl:3b`.
+- The vision agent asks the model for flat JSON, then normalizes non-standard output such as English colors, object arrays, and motif terms into Chinese product fields.
+- Vision results are versioned in the upload metadata cache; schema or normalization changes skip stale cached analysis and rerun recognition.
+- Complex display pieces and multicolor carvings need longer vision JSON. `empty vision json` usually means the model output was truncated or not parseable JSON; tune `OLLAMA_VISION_NUM_PREDICT` if needed.
 - Generated copy is buyer-facing and does not expose internal terms such as RAG, agent recommendation explanation, or pending merchant measurement.
 
 ### 3. Lead Follow-up Agent
@@ -303,6 +306,7 @@ Ports:
 | `OLLAMA_MODEL` / `AI_MODEL` | `qwen2.5:7b` | Text understanding model |
 | `OLLAMA_VISION_MODEL` / `VISION_MODEL` | auto selected | Merchant image recognition model |
 | `OLLAMA_VISION_TIMEOUT` | `60` | Vision request timeout in seconds |
+| `OLLAMA_VISION_NUM_PREDICT` | `320` | Max generated tokens for vision JSON; too low can truncate complex image output |
 | `OLLAMA_VISION_KEEP_ALIVE` | `15m` | Vision model keep-alive |
 | `VECTOR_STORE` | `auto` | `auto` enables Milvus without blocking source-of-truth writes; `milvus` requires the vector store; `sqlite`/`off` uses SQLite keyword retrieval only |
 | `MILVUS_URI` | `data/jade-agent-milvus.db` | Milvus Lite file or standalone Milvus service URL |

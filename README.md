@@ -121,6 +121,9 @@ flowchart LR
 - 图片由商家上传，保存到 `public/uploads`。
 - 商品表保存图片 URL，后续商品详情、商品管理、RAG 文档都使用同一批图片字段。
 - 当前视觉识别优先使用本地 Ollama 视觉模型，例如 `qwen2.5vl:3b`。
+- 视觉 Agent 要求模型返回扁平 JSON，并在后端把英文颜色、对象数组、题材词等非标准输出归一成中文商品字段。
+- 视觉识别结果带版本号缓存；当字段 schema 或归一化逻辑升级时，会自动跳过旧缓存重新识别。
+- 复杂摆件、俏色雕件会生成更长的视觉 JSON；`empty vision json` 通常表示模型输出被截断或不是可解析 JSON，可通过 `OLLAMA_VISION_NUM_PREDICT` 调整。
 - 生成文案面向买家展示，不写内部流程词，例如 RAG、Agent 推荐解释、待商家实测。
 
 ### 3. 客资跟进 Agent
@@ -303,6 +306,7 @@ http://127.0.0.1:2024
 | `OLLAMA_MODEL` / `AI_MODEL` | `qwen2.5:7b` | 文本理解模型 |
 | `OLLAMA_VISION_MODEL` / `VISION_MODEL` | 自动选择 | 商家发布图片识别模型 |
 | `OLLAMA_VISION_TIMEOUT` | `60` | 视觉模型请求超时秒数 |
+| `OLLAMA_VISION_NUM_PREDICT` | `320` | 视觉 JSON 最大生成 token 数；复杂图片过低会导致 JSON 截断 |
 | `OLLAMA_VISION_KEEP_ALIVE` | `15m` | 视觉模型保活时间 |
 | `VECTOR_STORE` | `auto` | `auto` 启用 Milvus 但不阻断主库写入；`milvus` 强制向量库可用；`sqlite`/`off` 只用 SQLite 关键词检索 |
 | `MILVUS_URI` | `data/jade-agent-milvus.db` | Milvus Lite 文件或独立 Milvus 服务地址 |

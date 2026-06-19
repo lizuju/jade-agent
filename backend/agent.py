@@ -36,7 +36,7 @@ from .validation import ValidationError
 ROOT_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = ROOT_DIR / "public" / "uploads"
 OLLAMA_VISION_CANDIDATES = ("qwen2.5vl", "qwen2-vl", "qwen3-vl", "llava", "bakllava", "minicpm-v", "moondream")
-VISION_RESULT_VERSION = 4
+VISION_RESULT_VERSION = 5
 CATEGORY_CLASSIFIER_VERSION = 4
 
 SEMANTIC_CATALOG = {
@@ -1391,6 +1391,26 @@ def compact_json_keys(value):
     return {str(key).strip(): item for key, item in value.items()}
 
 
+def normalize_vlm_list(value):
+    if not isinstance(value, list):
+        return []
+    items = []
+    for item in value:
+        if isinstance(item, dict):
+            for key in ("subject", "shape", "category", "use_form", "useForm", "color", "water"):
+                text = normalize_vlm_text(item.get(key))
+                if text:
+                    items.append(text)
+            motifs = item.get("motifs")
+            if isinstance(motifs, list):
+                items.extend(normalize_vlm_text(motif) for motif in motifs if normalize_vlm_text(motif))
+            continue
+        text = normalize_vlm_text(item)
+        if text:
+            items.append(text)
+    return compact(items)
+
+
 def normalize_vlm_category(value):
     text = str(value or "").strip().lower()
     if is_empty_vlm_value(text):
@@ -1453,7 +1473,14 @@ def normalize_vlm_text(value):
 
 def normalize_vlm_color(value):
     text = normalize_vlm_text(value)
-    mapping = {"绿色": "翠绿", "多色": "俏色", "multicolor": "俏色"}
+    lower = text.lower()
+    if "multicolor" in lower or "multi color" in lower or "multi-colored" in lower:
+        return "俏色"
+    if "blue" in lower and "white" in lower:
+        return "蓝白俏色"
+    if "green" in lower and "white" in lower:
+        return "绿白俏色"
+    mapping = {"绿色": "翠绿", "多色": "俏色", "multicolor": "俏色", "light blue": "蓝水", "blue": "蓝水", "white": "白冰", "green": "翠绿"}
     return mapping.get(text, text)
 
 
@@ -1529,8 +1556,8 @@ def ollama_vision_understanding(images):
             "flaw": normalize_vlm_text(cached.get("flaw")),
             "subject": normalize_vlm_text(cached.get("subject")),
             "useForm": normalize_vlm_text(cached.get("useForm")),
-            "motifs": [normalize_vlm_text(item) for item in cached.get("motifs", []) if normalize_vlm_text(item)] if isinstance(cached.get("motifs"), list) else [],
-            "subjects": [normalize_vlm_text(item) for item in cached.get("subjects", []) if normalize_vlm_text(item)] if isinstance(cached.get("subjects"), list) else [],
+            "motifs": normalize_vlm_list(cached.get("motifs")),
+            "subjects": normalize_vlm_list(cached.get("subjects")),
             "sameItem": boolish(cached.get("sameItem"), True),
             "mismatchReason": normalize_vlm_text(cached.get("mismatchReason")),
             "cached": True,
@@ -1544,9 +1571,10 @@ def ollama_vision_understanding(images):
     prompt = (
         "You are a jadeite product vision agent. Analyze all uploaded merchant images as one candidate product image set. "
         "First decide whether every image is the same jadeite item photographed from different angles/details. "
-        "Return only JSON with keys: is_jade boolean, same_item boolean, mismatch_reason string, subjects array, "
+        "Return one flat JSON object only. Do not nest objects or arrays of objects. "
+        "Keys: is_jade boolean, same_item boolean, mismatch_reason string, subjects string array, "
         "category string, water string, color string, shape string, visible_flaws string, confidence number 0-100, "
-        "subject string, use_form string, motifs array, is_wearable boolean, has_base boolean, evidence array of short strings. "
+        "subject string, use_form string, motifs string array, is_wearable boolean, has_base boolean, evidence string array. "
         "Use concise Chinese jadeite trade terms. Use open visual facts instead of forcing a jewelry category. "
         "Distinguish wearable jewelry, loose stones, handheld carvings and display sculptures. "
         "If same_item is true, combine facts across all views. If same_item is false, describe why in mismatch_reason and do not merge fields. "
@@ -1564,7 +1592,7 @@ def ollama_vision_understanding(images):
                 "temperature": 0,
                 "top_p": 0.2,
                 "num_ctx": 2048,
-                "num_predict": int(os.environ.get("OLLAMA_VISION_NUM_PREDICT", "180")),
+                "num_predict": int(os.environ.get("OLLAMA_VISION_NUM_PREDICT", "320")),
             },
         }).encode()
         req = request.Request(f"{ollama_base_url()}/api/chat", data=payload, headers={"Content-Type": "application/json"})
@@ -1593,7 +1621,7 @@ def ollama_vision_understanding(images):
         "isJade": boolish(first_present(parsed.get("is_jade"), parsed.get("isJade")), False),
         "sameItem": same_item,
         "mismatchReason": normalize_vlm_text(first_present(parsed.get("mismatch_reason"), parsed.get("mismatchReason"))),
-        "subjects": [normalize_vlm_text(item) for item in parsed.get("subjects", []) if normalize_vlm_text(item)] if isinstance(parsed.get("subjects"), list) else [],
+        "subjects": normalize_vlm_list(parsed.get("subjects")),
         "category": category,
         "water": normalize_vlm_water(parsed.get("water")),
         "color": normalize_vlm_color(parsed.get("color")),
@@ -1601,7 +1629,7 @@ def ollama_vision_understanding(images):
         "flaw": normalize_vlm_text(parsed.get("visible_flaws") or parsed.get("flaw")),
         "subject": normalize_vlm_text(parsed.get("subject")),
         "useForm": normalize_vlm_text(first_present(parsed.get("use_form"), parsed.get("useForm"))),
-        "motifs": [normalize_vlm_text(item) for item in parsed.get("motifs", []) if normalize_vlm_text(item)] if isinstance(parsed.get("motifs"), list) else [],
+        "motifs": normalize_vlm_list(parsed.get("motifs")),
         "isWearable": boolish(first_present(parsed.get("is_wearable"), parsed.get("isWearable")), False),
         "hasBase": boolish(first_present(parsed.get("has_base"), parsed.get("hasBase")), False),
         "confidence": max(0, min(100, int(confidence))),
