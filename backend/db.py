@@ -4,6 +4,8 @@ import secrets
 import sqlite3
 from pathlib import Path
 
+from .vector_store import embed_text, search_product_vectors, upsert_product_vector, vector_store_required
+
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT_DIR / "data"
@@ -351,26 +353,40 @@ def insert_product(product):
 
 
 def upsert_product_document(product):
+    metadata = {
+        "sku": product.get("sku"),
+        "title": product["title"],
+        "category": product["category"],
+        "price": product["price"],
+        "tags": product["tags"],
+        "keywords": product["searchKeywords"],
+        "status": product["status"],
+    }
+    embedding = embed_text(product["ragText"])
     db.execute(
         """
-        INSERT INTO product_documents (product_id, chunk_type, content, metadata_json)
-        VALUES (?, 'catalog_card', ?, ?)
+        INSERT INTO product_documents (product_id, chunk_type, content, metadata_json, embedding_json)
+        VALUES (?, 'catalog_card', ?, ?, ?)
         ON CONFLICT(product_id, chunk_type) DO UPDATE SET
           content = excluded.content,
           metadata_json = excluded.metadata_json,
+          embedding_json = excluded.embedding_json,
           updated_at = CURRENT_TIMESTAMP
         """,
-        (product["id"], product["ragText"], encode({
-            "sku": product.get("sku"),
-            "title": product["title"],
-            "category": product["category"],
-            "price": product["price"],
-            "tags": product["tags"],
-            "keywords": product["searchKeywords"],
-            "status": product["status"],
-        })),
+        (product["id"], product["ragText"], encode(metadata), encode(embedding)),
     )
     db.commit()
+    try:
+        upsert_product_vector({
+            "productId": product["id"],
+            "chunkType": "catalog_card",
+            "content": product["ragText"],
+            "metadata": metadata,
+            "embedding": embedding,
+        })
+    except Exception:
+        if vector_store_required():
+            raise
 
 
 def list_products(filter_data=None):
@@ -624,6 +640,31 @@ def snippet_for(content, matched_terms):
 def search_product_documents(query="", terms=None, category=None, limit=20):
     query_terms = compact([*search_terms_from_text(query), *(terms or [])])
     products = {product["id"]: product for product in list_products({"publicOnly": True})}
+    results_by_product = {}
+    try:
+        vector_docs = search_product_vectors(query=query, terms=query_terms, category=category, limit=max(limit * 2, 20))
+    except Exception:
+        vector_docs = []
+    for doc in vector_docs:
+        product = products.get(doc["productId"])
+        if not product:
+            continue
+        content = f"{doc.get('content') or product.get('ragText') or ''}\n{encode(doc.get('metadata') or {})}".lower()
+        matched_terms = [term for term in query_terms if term.lower() in content]
+        vector_score = max(0, min(float(doc.get("vectorScore") or 0), 1.0))
+        score = int(vector_score * 70) + len(matched_terms) * 4
+        if score <= 0:
+            continue
+        results_by_product[product["id"]] = {
+            "productId": product["id"],
+            "chunkType": doc.get("chunkType") or "catalog_card",
+            "score": score,
+            "matchedTerms": matched_terms,
+            "snippet": snippet_for(doc.get("content") or product.get("ragText"), matched_terms),
+            "product": product,
+            "source": "milvus_vector",
+            "vectorScore": round(vector_score, 4),
+        }
     rows = db.execute(
         """
         SELECT d.product_id, d.chunk_type, d.content, d.metadata_json, p.status
@@ -632,7 +673,6 @@ def search_product_documents(query="", terms=None, category=None, limit=20):
         WHERE p.deleted_at IS NULL AND p.status = 'listed'
         """
     ).fetchall()
-    results = []
     for row in rows:
         product = products.get(row["product_id"])
         if not product:
@@ -644,14 +684,23 @@ def search_product_documents(query="", terms=None, category=None, limit=20):
         keyword_boost = len([kw for kw in product["searchKeywords"] if any(term in kw or kw in term for term in query_terms)]) * 3
         score = len(matched_terms) * 9 + category_boost + tag_boost + keyword_boost
         if score > 0:
-            results.append({
+            existing = results_by_product.get(product["id"])
+            if existing:
+                existing["score"] += score
+                existing["matchedTerms"] = compact([*existing["matchedTerms"], *matched_terms])
+                existing["source"] = "milvus_hybrid"
+                continue
+            results_by_product[product["id"]] = {
                 "productId": product["id"],
                 "chunkType": row["chunk_type"],
                 "score": score,
                 "matchedTerms": matched_terms,
                 "snippet": snippet_for(row["content"], matched_terms),
                 "product": product,
-            })
+                "source": "sqlite_keyword",
+                "vectorScore": 0,
+            }
+    results = list(results_by_product.values())
     return sorted(results, key=lambda item: item["score"], reverse=True)[:limit]
 
 

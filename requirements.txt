@@ -1,3 +1,4 @@
 langgraph==1.2.5
 langgraph-cli[inmem]==0.4.30
+pymilvus[milvus_lite]==2.6.15
 pytest==8.4.2

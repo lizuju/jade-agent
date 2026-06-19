@@ -2,6 +2,7 @@ node_modules/
 dist/
 .venv/
 data/*.sqlite*
+data/*.db/
 public/uploads/
 .DS_Store
 __pycache__/

@@ -13,8 +13,8 @@ The goal is to turn buyer messages into searchable, rankable, explainable produc
 | Buyer app | AI sourcing chat, multi-turn refinement, product recommendations, product detail, lead creation |
 | Merchant app | Login, dashboard, product publishing, editing, listing, delisting, deletion, recycle bin, product list |
 | Lead app | Lead list, lead detail, contact status, AI follow-up copy |
-| Agent layer | Buyer matching agent, merchant publishing agent, lead follow-up agent, RAG retrieval, ranking explanations, run traces |
-| Data layer | SQLite product catalog, product retrieval documents, sessions, messages, leads, agent runs |
+| Agent layer | Buyer matching agent, merchant publishing agent, lead follow-up agent, Milvus hybrid RAG retrieval, ranking explanations, run traces |
+| Data layer | SQLite source of truth, Milvus vector index, product retrieval documents, sessions, messages, leads, agent runs |
 | Observability | Frontend trace panel, `agent_runs`, `/api/agent/runs`, local LangSmith Studio graph view |
 
 ## Architecture
@@ -29,15 +29,17 @@ flowchart LR
   API --> LeadGraph["LEAD_FOLLOWUP_GRAPH\nload_lead -> write_followup -> record_run"]
 
   BuyerGraph --> QU["Query Understanding\nconcept extraction + intent + latest signal"]
-  BuyerGraph --> RAG["RAG Tool\nsearch_product_documents"]
+  BuyerGraph --> RAG["Hybrid RAG Tool\nsearch_product_documents"]
   BuyerGraph --> Rank["Ranking Agent\nrules + semantics + budget + latest preference"]
   PublishGraph --> Vision["Ollama Vision Agent\nmerchant uploaded images"]
   LeadGraph --> Follow["Follow-up Agent\nbuyer need + product + seller"]
 
   QU --> DB["SQLite\nproducts / leads / sessions / messages / agent_runs"]
-  RAG --> Docs["product_documents"]
+  RAG --> Milvus["Milvus Vector Store\njade_product_documents"]
+  RAG --> Docs["SQLite product_documents\nkeyword evidence"]
   Rank --> DB
   Docs --> DB
+  Milvus --> Docs
   Vision --> Uploads["public/uploads\nimage + metadata"]
   API --> DB
 
@@ -149,7 +151,7 @@ Buyer matching is not a single prompt response. It is split into four layers:
 
 1. **Intent detection**: identifies new sourcing, prior-need refinement, customer-service chat, or clarification needs.
 2. **Concept understanding**: extracts budget, category, color, water quality, size, flaws, certificate needs, occasion, and price preference.
-3. **RAG retrieval**: queries `product_documents` with the original text and expanded concepts.
+3. **RAG retrieval**: queries the Milvus vector index and SQLite `product_documents` keyword documents with the original text and expanded concepts.
 4. **Ranking and explanation**: ranks with hard constraints, budget fit, semantic hits, RAG evidence, and latest-turn preference.
 
 Ranking signals:
@@ -161,7 +163,7 @@ Ranking signals:
 | Latest preference | Messages such as "most expensive", "cheaper", "mid price", "greener", and "for gifting" affect current-turn ranking |
 | Color / water quality | Compared through structured product fields and document hits |
 | Size / flaws / certificate | Used as rule constraints and recommendation explanations |
-| RAG evidence | Product document hits, tags, search keywords, and detail snippets |
+| RAG evidence | Milvus vector hits, product document hits, tags, search keywords, and detail snippets |
 
 ## RAG Data Flow
 
@@ -172,18 +174,23 @@ When a product is created or updated, the system writes product fields into `pro
 - flaws, certificate, treatment
 - tags, intro, detail, merchant notes
 
+The same product document is embedded and written into the Milvus collection `jade_product_documents`. SQLite remains the source of truth for products and document text; Milvus stores the vector index and required retrieval metadata.
+
 When a buyer message enters the matching flow:
 
 1. `query_understanding.py` extracts concepts and expansion terms.
-2. `search_product_documents()` searches `product_documents`.
-3. Retrieval returns product ID, matched terms, score, snippet, and product payload.
-4. `match_products` merges RAG results with structured rules for final ranking.
+2. `search_product_documents()` searches Milvus first, then SQLite `product_documents` keyword evidence.
+3. Vector score and keyword score for the same product are merged into a hybrid score.
+4. Retrieval returns product ID, retrieval source, vector score, matched terms, score, snippet, and product payload.
+5. `match_products` merges RAG results with structured rules for final ranking.
 
-RAG provides candidates and evidence. The ranking agent decides the final recommendations.
+RAG provides candidates and evidence. The ranking agent decides the final recommendations. Product listing, delisting, editing, and deletion update the product document and vector index together.
 
 ## Database
 
-Local database: `data/jade-agent.sqlite`
+Local business database: `data/jade-agent.sqlite`
+
+The local vector database uses Milvus Lite by default: `data/jade-agent-milvus.db`. To use a standalone Milvus service, set `MILVUS_URI` to a service URL such as `http://127.0.0.1:19530`.
 
 | Table | Purpose |
 | --- | --- |
@@ -197,6 +204,10 @@ Local database: `data/jade-agent.sqlite`
 | `agent_runs` | Input, output, trace, and status for every agent run |
 | `query_concepts` | Query-understanding concept dictionary |
 | `query_understanding_events` | Per-turn query understanding events |
+
+| Milvus Collection | Purpose |
+| --- | --- |
+| `jade_product_documents` | Product document vector index with `product_id`, `chunk_type`, `content`, `category`, `status`, `price`, and vectors |
 
 ## API
 
@@ -227,6 +238,7 @@ Local database: `data/jade-agent.sqlite`
 npm install
 python3 -m pip install -r requirements.txt
 npm run seed
+npm run milvus:sync
 npm run dev
 ```
 
@@ -292,6 +304,12 @@ Ports:
 | `OLLAMA_VISION_MODEL` / `VISION_MODEL` | auto selected | Merchant image recognition model |
 | `OLLAMA_VISION_TIMEOUT` | `60` | Vision request timeout in seconds |
 | `OLLAMA_VISION_KEEP_ALIVE` | `15m` | Vision model keep-alive |
+| `VECTOR_STORE` | `auto` | `auto` enables Milvus without blocking source-of-truth writes; `milvus` requires the vector store; `sqlite`/`off` uses SQLite keyword retrieval only |
+| `MILVUS_URI` | `data/jade-agent-milvus.db` | Milvus Lite file or standalone Milvus service URL |
+| `MILVUS_COLLECTION` | `jade_product_documents` | Product document vector collection |
+| `MILVUS_EMBEDDING_DIM` | `384` | Embedding dimension |
+| `VECTOR_EMBEDDING_PROVIDER` | `hash` | Default deterministic local embeddings; set to `ollama` for Ollama embeddings |
+| `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Model used when `VECTOR_EMBEDDING_PROVIDER=ollama` |
 
 ## Tests
 
@@ -309,7 +327,8 @@ npm test
 | `backend/app.py` | Python API, auth, uploads, products, leads, and agent routes |
 | `backend/agent.py` | LangGraph workflows, buyer matching, merchant publishing, and lead follow-up |
 | `backend/query_understanding.py` | Query understanding, concept normalization, optional Ollama JSON parsing |
-| `backend/db.py` | SQLite schema, seed data, product documents, run records |
+| `backend/db.py` | SQLite schema, seed data, product documents, Milvus sync entry points, run records |
+| `backend/vector_store.py` | Milvus client, embeddings, product vector writes, and vector retrieval |
 | `backend/studio_graphs.py` | Graph wrappers for LangSmith Studio |
 | `backend/validation.py` | API boundary input validation |
 | `src/App.jsx` | Frontend entry and page mounting |
@@ -322,4 +341,5 @@ npm test
 | `tests/test_api.py` | Python API tests |
 | `tests/e2e/app-smoke.spec.js` | Playwright smoke tests |
 | `data/jade-agent.sqlite` | Local SQLite database |
+| `data/jade-agent-milvus.db` | Local Milvus Lite vector database |
 | `public/uploads` | Merchant-uploaded images |

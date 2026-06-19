@@ -38,6 +38,7 @@ def api_server():
         "DEV_OTP_CODE": "123456",
         "QUERY_UNDERSTANDING_PROVIDER": "off",
         "OLLAMA_VISION_MODEL": "",
+        "VECTOR_STORE": "sqlite",
     })
     python = ROOT / ".venv" / "bin" / "python"
     cmd = [str(python if python.exists() else sys.executable), "-u", "-m", "backend.app"]
@@ -82,6 +83,37 @@ def test_health_and_public_state(api_server):
     assert payload["seller"] is None
     assert payload["metrics"]["productQuota"] == 1000
     assert payload["metrics"]["listedProducts"] > 0
+
+
+def test_vector_embedding_is_stable():
+    from backend.vector_store import hash_embedding
+
+    first = hash_embedding("冰种晴底翡翠手镯", dim=32)
+    second = hash_embedding("冰种晴底翡翠手镯", dim=32)
+    assert len(first) == 32
+    assert first == second
+    assert sum(abs(value) for value in first) > 0
+
+
+def test_product_document_search_merges_vector_hits(monkeypatch):
+    from backend import db as dbm
+
+    monkeypatch.setenv("VECTOR_STORE", "sqlite")
+    dbm.seed_database()
+    product = next(item for item in dbm.list_products({"publicOnly": True}) if item["category"] == "手镯")
+    monkeypatch.setattr(dbm, "search_product_vectors", lambda **kwargs: [{
+        "productId": product["id"],
+        "chunkType": "catalog_card",
+        "content": product["ragText"],
+        "metadata": {"status": "listed", "category": product["category"]},
+        "vectorScore": 0.91,
+    }])
+
+    docs = dbm.search_product_documents(query=product["title"], terms=product["searchKeywords"], category=product["category"], limit=3)
+
+    assert docs[0]["productId"] == product["id"]
+    assert docs[0]["source"] == "milvus_hybrid"
+    assert docs[0]["vectorScore"] == 0.91
 
 
 def test_buyer_match_uses_agent_retrieval(api_server):

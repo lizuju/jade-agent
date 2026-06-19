@@ -1166,7 +1166,7 @@ def buyer_match_node(state):
         {"label": "语义识别 Agent", "detail": f"{parsed_need.get('category') or '未限定品类'} / {('￥' + format(parsed_need['budget'], ',')) if parsed_need.get('budget') else '未限定预算'} / {'、'.join(parsed_need.get('queryTerms') or []) or '无检索词'} / 置信度 {round((parsed_need.get('confidence') or 0) * 100)}%"},
         {"label": "LangGraph状态", "detail": "LangGraph buyer_match 完成意图识别、RAG召回、规则排序和解释生成"},
         {"label": "规则校验 Agent", "detail": f"{'；'.join(validation['passed']) or '基础规则通过'}{('；提醒：' + '；'.join(validation['warnings'])) if validation['warnings'] else ''}"},
-        {"label": "RAG检索 Tool", "detail": f"查询 product_documents，召回 {len(retrieval_docs)} 条证据；命中词：{'、'.join((retrieval_docs[0]['matchedTerms'] if retrieval_docs else [])[:5]) or '无'}；候选池 {len(candidates)} 件"},
+        {"label": "RAG检索 Tool", "detail": f"Milvus 向量 + product_documents 关键词混合召回 {len(retrieval_docs)} 条证据；命中词：{'、'.join((retrieval_docs[0]['matchedTerms'] if retrieval_docs else [])[:5]) or '无'}；候选池 {len(candidates)} 件"},
         {"label": "排序 Agent", "detail": f"{products[0]['title']}：总分 {products[0]['agentScore']['total']} = 语义 {products[0]['agentScore']['semantic']} + 规则 {products[0]['agentScore']['rules']} + RAG {products[0]['agentScore']['rag']} + 本轮 {products[0]['agentScore'].get('preference', 0)}" if products else "暂无候选"},
         {"label": "解释 Agent", "detail": "、".join(products[0]["matchReasons"]) if products else "需要更多需求信息"},
         {"label": "客资分发 Tool", "detail": "已写入商家客资列表" if buyer_email else "未留邮箱，仅展示匹配结果"},
@@ -1177,6 +1177,8 @@ def buyer_match_node(state):
         "score": doc["score"],
         "matchedTerms": doc["matchedTerms"],
         "snippet": doc["snippet"],
+        "source": doc.get("source"),
+        "vectorScore": doc.get("vectorScore"),
     } for doc in retrieval_docs[:6]]}
     return {"parsed_need": parsed_need, "latest_signal": latest_signal, "result": {"runId": state["run_id"], "sessionId": state["session_id"], "mode": "match", "intent": intent, "latestSignal": latest_signal, "reply": reply, "parsedNeed": parsed_need, "validation": validation, "retrieval": retrieval, "products": products, "trace": trace}}
 
