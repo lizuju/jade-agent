@@ -119,3 +119,59 @@ def test_auth_and_publish_boundaries(api_server):
     status, payload = request_json("POST", "/api/agent/publish", {"images": []}, token=token)
     assert status == 400
     assert payload["details"][0]["field"] == "images"
+
+
+def test_publish_rejects_mixed_image_set(monkeypatch):
+    from backend import agent
+    from backend.validation import ValidationError
+
+    monkeypatch.setattr(agent, "ollama_vision_understanding", lambda images: {
+        "isJade": True,
+        "sameItem": False,
+        "mismatchReason": "一张是手镯，另一张是吊坠",
+        "confidence": 88,
+    })
+
+    with pytest.raises(ValidationError) as error:
+        agent.publish_image_understanding("", ["/uploads/a.jpg", "/uploads/b.jpg"], [{}, {}])
+
+    assert error.value.details[0]["field"] == "images"
+    assert "不是同一个翡翠商品" in error.value.details[0]["message"]
+
+
+def test_publish_tags_use_image_facts(monkeypatch):
+    from backend import agent
+
+    monkeypatch.setattr(agent, "ollama_vision_understanding", lambda images: {
+        "isJade": True,
+        "sameItem": True,
+        "category": "戒指",
+        "water": "糯种",
+        "color": "翠绿",
+        "shape": "方形",
+        "visible_flaws": "图片未见明显瑕疵",
+        "flaw": "图片未见明显瑕疵",
+        "confidence": 92,
+        "subject": "方形主石",
+        "useForm": "镶嵌戒指",
+        "motifs": [],
+        "isWearable": True,
+        "hasBase": False,
+        "evidence": ["方形翠绿主石", "银色金属戒托", "镶嵌结构"],
+        "model": "fake-vlm",
+    })
+    monkeypatch.setattr(agent, "ollama_vision_category", lambda images: {
+        "category": "戒指",
+        "shape": "方形",
+        "evidence": ["金属戒托"],
+    })
+
+    vision = agent.publish_image_understanding("", ["/uploads/ring.jpg", "/uploads/ring-detail.jpg"], [{}, {}])
+    draft = agent.local_draft("", ["/uploads/ring.jpg", "/uploads/ring-detail.jpg"], [{}, {}], vision)
+
+    assert draft["vision"]["sameItem"] is True
+    assert "翡翠戒指" in draft["tags"]
+    assert "方形主石" in draft["tags"]
+    assert "金属戒托" in draft["tags"]
+    assert "天然A货" not in draft["tags"]
+    assert "支持复检" not in draft["tags"]

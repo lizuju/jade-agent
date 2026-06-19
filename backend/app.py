@@ -305,7 +305,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/agent/capabilities":
             self.json_response({
                 "buyerMatch": ["frontend_need_validation", "backend_payload_validation", "langgraph_agent_orchestration", "deterministic_intent_routing", "session_context_refinement", "multi_dimensional_preference_profile", "semantic_need_recognition", "rule_validation", "product_documents_rag_retrieval", "semantic_rule_rag_ranking", "traceable_agent_runs"],
-                "merchantPublish": ["frontend_product_validation", "backend_product_validation", "langgraph_publish_orchestration", "merchant_uploaded_images", "ollama_vision_agent_structured_recognition", "uploaded_image_feature_fallback", "jade_image_validation", "product_document_indexing"],
+                "merchantPublish": ["frontend_product_validation", "backend_product_validation", "langgraph_publish_orchestration", "merchant_uploaded_images", "multi_image_same_item_validation", "ollama_vision_agent_structured_recognition", "image_fact_tags", "uploaded_image_feature_fallback", "jade_image_validation", "product_document_indexing"],
                 "leadFollowup": ["lead_authorization_check", "langgraph_followup_orchestration", "buyer_need_summary", "followup_copy_generation", "next_action_generation", "traceable_agent_runs"],
             })
             return

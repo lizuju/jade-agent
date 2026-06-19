@@ -17,6 +17,7 @@ from backend.agent import (
     publish_draft_node,
     publish_prepare_node,
     publish_record_node,
+    publish_validate_images_node,
 )
 from backend.db import get_seller, list_leads
 
@@ -116,11 +117,13 @@ def build_studio_publish_graph():
     graph = StateGraph(StudioPublishState)
     graph.add_node("studio_input", studio_publish_input_node)
     graph.add_node("prepare_publish", publish_prepare_node)
+    graph.add_node("validate_images", publish_validate_images_node)
     graph.add_node("draft_product", publish_draft_node)
     graph.add_node("record_run", publish_record_node)
     graph.add_edge(START, "studio_input")
     graph.add_edge("studio_input", "prepare_publish")
-    graph.add_edge("prepare_publish", "draft_product")
+    graph.add_edge("prepare_publish", "validate_images")
+    graph.add_edge("validate_images", "draft_product")
     graph.add_edge("draft_product", "record_run")
     graph.add_edge("record_run", END)
     return graph.compile()

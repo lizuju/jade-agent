@@ -36,8 +36,8 @@ from .validation import ValidationError
 ROOT_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = ROOT_DIR / "public" / "uploads"
 OLLAMA_VISION_CANDIDATES = ("qwen2.5vl", "qwen2-vl", "qwen3-vl", "llava", "bakllava", "minicpm-v", "moondream")
-VISION_RESULT_VERSION = 3
-CATEGORY_CLASSIFIER_VERSION = 3
+VISION_RESULT_VERSION = 4
+CATEGORY_CLASSIFIER_VERSION = 4
 
 SEMANTIC_CATALOG = {
     "categories": ["手镯", "吊坠", "项链", "戒指", "戒面", "平安扣", "珠链", "手链", "手串", "无事牌", "耳坠", "挂件", "胸针", "把件", "摆件"],
@@ -108,8 +108,13 @@ VLM_TERM_TRANSLATIONS = {
     "toad": "蟾蜍",
     "metal band": "金属戒托",
     "metal shank": "金属戒托",
+    "metal setting": "金属镶嵌",
+    "silver metal": "银色金属",
+    "square stone": "方形主石",
+    "square main stone": "方形主石",
     "rectangular": "方形",
     "rectangle": "方形",
+    "square": "方形",
     "round": "圆润",
 }
 
@@ -138,6 +143,27 @@ def price_or(value, fallback=None):
     if "k" in text.lower():
         return round(amount * 1000)
     return round(amount)
+
+
+def boolish(value, fallback=False):
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"true", "yes", "y", "1", "same", "同一件", "是"}:
+        return True
+    if text in {"false", "no", "n", "0", "different", "不是", "不同"}:
+        return False
+    return fallback
+
+
+def first_present(*values):
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
 
 
 def extract_first(text, terms):
@@ -926,6 +952,7 @@ class AgentGraphState(TypedDict, total=False):
     hint: str
     images: list[str]
     image_analyses: list[dict[str, Any]]
+    vision: dict[str, Any]
     session_state: dict[str, Any]
     current_need: dict[str, Any]
     parsed_need: dict[str, Any]
@@ -1305,6 +1332,10 @@ def vision_path_for(image):
     return upload_path_for(image)
 
 
+def image_set_signature(images):
+    return "|".join(str(image or "") for image in images or [])
+
+
 def ollama_base_url():
     return os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 
@@ -1483,8 +1514,9 @@ def ollama_vision_understanding(images):
     model = ollama_vision_model()
     if not model:
         return {"provider": "ollama_vision", "error": "no local vision model found"}
+    signature = image_set_signature(images)
     cached = upload_analysis_for(images[0]).get("visionResult") if images else None
-    if isinstance(cached, dict) and cached.get("model") == model and cached.get("version") == VISION_RESULT_VERSION:
+    if isinstance(cached, dict) and cached.get("model") == model and cached.get("version") == VISION_RESULT_VERSION and cached.get("imageSet") == signature:
         cached_shape = normalize_vlm_shape(cached.get("shape"))
         return {
             **cached,
@@ -1493,6 +1525,12 @@ def ollama_vision_understanding(images):
             "color": normalize_vlm_color(cached.get("color")),
             "shape": cached_shape,
             "flaw": normalize_vlm_text(cached.get("flaw")),
+            "subject": normalize_vlm_text(cached.get("subject")),
+            "useForm": normalize_vlm_text(cached.get("useForm")),
+            "motifs": [normalize_vlm_text(item) for item in cached.get("motifs", []) if normalize_vlm_text(item)] if isinstance(cached.get("motifs"), list) else [],
+            "subjects": [normalize_vlm_text(item) for item in cached.get("subjects", []) if normalize_vlm_text(item)] if isinstance(cached.get("subjects"), list) else [],
+            "sameItem": boolish(cached.get("sameItem"), True),
+            "mismatchReason": normalize_vlm_text(cached.get("mismatchReason")),
             "cached": True,
             "durationMs": 0,
         }
@@ -1502,16 +1540,18 @@ def ollama_vision_understanding(images):
         return {"provider": "ollama_vision", "model": model, "error": "no local upload image file"}
     started = time.time()
     prompt = (
-        "You are a jadeite product vision agent. Analyze the uploaded merchant product image. "
-        "Return only JSON with keys: is_jade boolean, category string, water string, color string, "
-        "shape string, visible_flaws string, confidence number 0-100, subject string, use_form string, "
-        "motifs array, is_wearable boolean, has_base boolean, evidence array of short strings. "
+        "You are a jadeite product vision agent. Analyze all uploaded merchant images as one candidate product image set. "
+        "First decide whether every image is the same jadeite item photographed from different angles/details. "
+        "Return only JSON with keys: is_jade boolean, same_item boolean, mismatch_reason string, subjects array, "
+        "category string, water string, color string, shape string, visible_flaws string, confidence number 0-100, "
+        "subject string, use_form string, motifs array, is_wearable boolean, has_base boolean, evidence array of short strings. "
         "Use concise Chinese jadeite trade terms. Use open visual facts instead of forcing a jewelry category. "
         "Distinguish wearable jewelry, loose stones, handheld carvings and display sculptures. "
+        "If same_item is true, combine facts across all views. If same_item is false, describe why in mismatch_reason and do not merge fields. "
         "Use null when a field is not visible. Do not infer ring size or certificate from the image."
     )
     try:
-        encoded_images = [base64.b64encode(path.read_bytes()).decode() for path in image_paths[:3]]
+        encoded_images = [base64.b64encode(path.read_bytes()).decode() for path in image_paths[:6]]
         payload = json.dumps({
             "model": model,
             "messages": [{"role": "user", "content": prompt, "images": encoded_images}],
@@ -1539,21 +1579,29 @@ def ollama_vision_understanding(images):
     raw_shape = normalize_vlm_text(parsed.get("shape"))
     category = normalize_vlm_category(parsed.get("category")) or normalize_vlm_category(raw_shape)
     shape = "" if normalize_vlm_category(raw_shape) else raw_shape
+    different_items = boolish(first_present(parsed.get("different_items"), parsed.get("differentItems")), False)
+    same_item = True if len(image_paths) <= 1 else boolish(first_present(parsed.get("same_item"), parsed.get("sameItem")), True)
+    if different_items:
+        same_item = False
     result = {
         "provider": "ollama_vision",
         "model": model,
         "version": VISION_RESULT_VERSION,
-        "isJade": bool(parsed.get("is_jade") or parsed.get("isJade")),
+        "imageSet": signature,
+        "isJade": boolish(first_present(parsed.get("is_jade"), parsed.get("isJade")), False),
+        "sameItem": same_item,
+        "mismatchReason": normalize_vlm_text(first_present(parsed.get("mismatch_reason"), parsed.get("mismatchReason"))),
+        "subjects": [normalize_vlm_text(item) for item in parsed.get("subjects", []) if normalize_vlm_text(item)] if isinstance(parsed.get("subjects"), list) else [],
         "category": category,
         "water": normalize_vlm_water(parsed.get("water")),
         "color": normalize_vlm_color(parsed.get("color")),
         "shape": normalize_vlm_shape(shape),
         "flaw": normalize_vlm_text(parsed.get("visible_flaws") or parsed.get("flaw")),
         "subject": normalize_vlm_text(parsed.get("subject")),
-        "useForm": normalize_vlm_text(parsed.get("use_form") or parsed.get("useForm")),
+        "useForm": normalize_vlm_text(first_present(parsed.get("use_form"), parsed.get("useForm"))),
         "motifs": [normalize_vlm_text(item) for item in parsed.get("motifs", []) if normalize_vlm_text(item)] if isinstance(parsed.get("motifs"), list) else [],
-        "isWearable": bool(parsed.get("is_wearable") or parsed.get("isWearable")),
-        "hasBase": bool(parsed.get("has_base") or parsed.get("hasBase")),
+        "isWearable": boolish(first_present(parsed.get("is_wearable"), parsed.get("isWearable")), False),
+        "hasBase": boolish(first_present(parsed.get("has_base"), parsed.get("hasBase")), False),
         "confidence": max(0, min(100, int(confidence))),
         "evidence": parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else [],
         "durationMs": round((time.time() - started) * 1000),
@@ -1567,8 +1615,9 @@ def ollama_vision_category(images):
     model = ollama_vision_model()
     if not model or not images:
         return {}
+    signature = image_set_signature(images)
     cached = upload_analysis_for(images[0]).get("categoryResult")
-    if isinstance(cached, dict) and cached.get("model") == model and cached.get("version") == CATEGORY_CLASSIFIER_VERSION:
+    if isinstance(cached, dict) and cached.get("model") == model and cached.get("version") == CATEGORY_CLASSIFIER_VERSION and cached.get("imageSet") == signature:
         return {
             **cached,
             "category": normalize_vlm_category(cached.get("category")),
@@ -1590,7 +1639,7 @@ def ollama_vision_category(images):
         "If it has a carved base or is a decorative scene, say that clearly in evidence."
     )
     try:
-        encoded_images = [base64.b64encode(path.read_bytes()).decode() for path in image_paths[:3]]
+        encoded_images = [base64.b64encode(path.read_bytes()).decode() for path in image_paths[:6]]
         payload = json.dumps({
             "model": model,
             "messages": [{"role": "user", "content": prompt, "images": encoded_images}],
@@ -1617,14 +1666,15 @@ def ollama_vision_category(images):
         "provider": "ollama_vision_category",
         "model": model,
         "version": CATEGORY_CLASSIFIER_VERSION,
+        "imageSet": signature,
         "rawCategory": normalize_vlm_text(parsed.get("raw_category") or parsed.get("category")),
         "productRole": normalize_vlm_text(parsed.get("product_role") or parsed.get("productRole")),
         "useForm": normalize_vlm_text(parsed.get("use_form") or parsed.get("useForm")),
         "category": normalize_vlm_category(parsed.get("raw_category") or parsed.get("category") or parsed.get("product_role") or parsed.get("use_form")),
         "shape": normalize_vlm_shape(parsed.get("shape")),
         "motifs": [normalize_vlm_text(item) for item in parsed.get("motifs", []) if normalize_vlm_text(item)] if isinstance(parsed.get("motifs"), list) else [],
-        "isWearable": bool(parsed.get("is_wearable") or parsed.get("isWearable")),
-        "hasBase": bool(parsed.get("has_base") or parsed.get("hasBase")),
+        "isWearable": boolish(first_present(parsed.get("is_wearable"), parsed.get("isWearable")), False),
+        "hasBase": boolish(first_present(parsed.get("has_base"), parsed.get("hasBase")), False),
         "confidence": max(0, min(100, int(price_or(parsed.get("confidence"), 0) or 0))),
         "evidence": parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else [],
         "durationMs": round((time.time() - started) * 1000),
@@ -1817,6 +1867,9 @@ def publish_image_understanding(hint, images, supplied_analyses):
         raise ValidationError("Invalid publish image", [{"field": "images", "message": f"视觉模型识别失败：{vlm['error']}"}])
     if not vlm.get("isJade"):
         raise ValidationError("Invalid publish image", [{"field": "images", "message": "视觉模型未确认该图片为翡翠商品，请上传清晰的翡翠商品照片"}])
+    if len(images) > 1 and not vlm.get("sameItem"):
+        reason = f"：{vlm.get('mismatchReason')}" if vlm.get("mismatchReason") else ""
+        raise ValidationError("Invalid publish image set", [{"field": "images", "message": f"多张图片看起来不是同一个翡翠商品{reason}。请只上传同一件商品的不同角度或细节图。"}])
     need = heuristic_need(hint) if hint else {}
     category_result = ollama_vision_category(images) if not need.get("category") else {}
     category = resolve_publish_category(need, vlm, category_result, image_signal)
@@ -1840,8 +1893,14 @@ def publish_image_understanding(hint, images, supplied_analyses):
         "confidence": confidence,
         "analyses": analyses,
         "isJade": True,
+        "sameItem": vlm.get("sameItem", True),
+        "mismatchReason": vlm.get("mismatchReason") or "",
         "provider": "ollama_vision",
         "model": vlm.get("model"),
+        "subject": vlm.get("subject") or "",
+        "subjects": vlm.get("subjects") or [],
+        "useForm": vlm.get("useForm") or "",
+        "motifs": vlm.get("motifs") or [],
         "evidence": vlm.get("evidence") or [],
         "categoryEvidence": category_result.get("evidence") or [],
     }
@@ -1849,12 +1908,56 @@ def publish_image_understanding(hint, images, supplied_analyses):
 
 def publish_evidence_text(vision):
     texts = []
+    for key in ["subject", "useForm", "category", "water", "color", "shape", "flaw"]:
+        if vision.get(key):
+            texts.append(str(vision.get(key)))
+    for item in [*(vision.get("subjects") or []), *(vision.get("motifs") or [])]:
+        texts.append(str(item))
     for item in [*(vision.get("evidence") or []), *(vision.get("categoryEvidence") or [])]:
         if isinstance(item, dict):
             texts.extend(str(value) for value in item.values() if isinstance(value, (str, int, float)))
         else:
             texts.append(str(item))
     return " ".join(texts)
+
+
+def publish_fact_tags(vision, category_text, shape_text, size_text, flaw_text, visible_water, visible_color):
+    evidence = publish_evidence_text(vision)
+    motifs = [visible_field(item) for item in (vision.get("motifs") or []) if visible_field(item)]
+    subjects = [visible_field(item) for item in (vision.get("subjects") or []) if visible_field(item)]
+    subject = visible_field(vision.get("subject"))
+    use_form = visible_field(vision.get("useForm"))
+    combined_shape = f"{shape_text}{category_text}" if shape_text and category_text and category_text != "翡翠商品" and category_text not in shape_text else shape_text
+    fact_terms = []
+    for label, terms in [
+        ("方形主石", ["方形主石", "square stone", "square main stone"]),
+        ("金属戒托", ["金属戒托", "银色金属", "戒托", "metal band", "metal shank", "metal setting"]),
+        ("镶嵌款", ["镶嵌", "戒托", "metal setting"]),
+        ("立体雕刻", ["立体", "雕刻", "雕件", "sculpture", "carving"]),
+        ("底座陈设", ["底座", "陈设", "摆件", "base", "display"]),
+        ("花叶题材", ["花叶", "花", "叶", "flower", "leaf"]),
+        ("金蟾题材", ["金蟾", "蟾蜍", "frog", "toad"]),
+        ("海螺题材", ["海螺", "贝壳", "shell", "conch"]),
+        ("抛光光面", ["抛光", "光滑", "光面", "smooth"]),
+        ("俏色雕工", ["俏色", "多色", "multicolored"]),
+    ]:
+        if any(term in evidence for term in terms):
+            fact_terms.append(label)
+    size_tag = size_text if vision.get("size") else ""
+    flaw_tag = flaw_text if flaw_text and flaw_text != "以实物复核为准" else ""
+    return compact([
+        visible_water,
+        visible_color,
+        f"翡翠{category_text}" if category_text != "翡翠商品" else "",
+        combined_shape,
+        subject,
+        use_form,
+        *motifs,
+        *subjects,
+        size_tag,
+        flaw_tag,
+        *fact_terms,
+    ])[:10]
 
 
 def publish_copy_for(title, vision, water_text, color_text, category_text, shape_text, size_text, flaw_text):
@@ -1902,8 +2005,8 @@ def publish_copy_for(title, vision, water_text, color_text, category_text, shape
     return intro, detail
 
 
-def local_draft(hint, images, image_analyses=None):
-    vision = publish_image_understanding(hint, images, image_analyses)
+def local_draft(hint, images, image_analyses=None, vision=None):
+    vision = vision or publish_image_understanding(hint, images, image_analyses)
     title = publish_title_for(vision)
     visible_water = visible_field(vision["water"])
     visible_color = visible_field(vision["color"])
@@ -1914,18 +2017,9 @@ def local_draft(hint, images, image_analyses=None):
     shape_text = visible_field(vision["shape"]) or ("圆润" if category_text == "手镯" else "经典")
     size_text = publish_display_size(category_text, shape_text, vision["size"])
     flaw_text = vision["flaw"] if vision["flaw"] != "以实物复核为准" else "图片未见明显纹裂"
-    tags = compact([
-        visible_water,
-        visible_color,
-        f"翡翠{category_text}" if category_text != "翡翠商品" else "",
-        shape_text,
-        size_text,
-        flaw_text,
-        "天然A货",
-        "支持复检",
-        vision["scene"],
-    ])[:10]
+    tags = publish_fact_tags(vision, category_text, shape_text, size_text, flaw_text, visible_water, visible_color)
     intro, detail = publish_copy_for(title, vision, water_text, color_text, category_text, shape_text, size_text, flaw_text)
+    image_check = "多张图片已校验为同一件商品" if len(images) > 1 else "单张图片已校验"
     return {
         "title": title[:32],
         "category": vision["category"],
@@ -1948,11 +2042,13 @@ def local_draft(hint, images, image_analyses=None):
         "tags": tags,
         "images": images,
         "merchantNotes": "AI已基于商家上传图片生成，发布前请复核尺寸、瑕疵、证书和价格。",
-        "agentNotes": ["翡翠图片校验", "图像字段识别", "商品文案生成", "价格区间估算", "发布合规检查"],
-        "checks": ["已确认存在商家上传图片", f"图片校验置信度 {vision['confidence']}%", "标题含品类和图像识别字段", "顾客文案已去除内部流程描述"],
+        "agentNotes": ["翡翠图片校验", "多图同物校验", "图像字段识别", "商品文案生成", "价格区间估算", "发布合规检查"],
+        "checks": ["已确认存在商家上传图片", image_check, f"图片校验置信度 {vision['confidence']}%", "标题含品类和图像识别字段", "商品标签来自图片事实"],
         "confidence": round(vision["confidence"] / 100, 2),
         "vision": {
             "isJade": vision["isJade"],
+            "sameItem": vision.get("sameItem", True),
+            "mismatchReason": vision.get("mismatchReason") or "",
             "confidence": vision["confidence"],
             "provider": vision.get("provider"),
             "model": vision.get("model"),
@@ -1962,6 +2058,10 @@ def local_draft(hint, images, image_analyses=None):
             "water": vision["water"],
             "color": vision["color"],
             "shape": vision["shape"],
+            "subject": vision.get("subject") or "",
+            "subjects": vision.get("subjects") or [],
+            "useForm": vision.get("useForm") or "",
+            "motifs": vision.get("motifs") or [],
         },
     }
 
@@ -1976,9 +2076,14 @@ def publish_prepare_node(state):
     }
 
 
+def publish_validate_images_node(state):
+    vision = publish_image_understanding(state["hint"], state["images"], state["image_analyses"])
+    return {"vision": vision}
+
+
 def publish_draft_node(state):
     draft = {
-        **local_draft(state["hint"], state["images"], state["image_analyses"]),
+        **local_draft(state["hint"], state["images"], state["image_analyses"], state.get("vision")),
         "sellerId": state["seller_id"],
         "provider": "ollama-vision-agent",
     }
@@ -1995,10 +2100,12 @@ def publish_record_node(state):
 def build_publish_graph():
     graph = StateGraph(AgentGraphState)
     graph.add_node("prepare_publish", publish_prepare_node)
+    graph.add_node("validate_images", publish_validate_images_node)
     graph.add_node("draft_product", publish_draft_node)
     graph.add_node("record_run", publish_record_node)
     graph.add_edge(START, "prepare_publish")
-    graph.add_edge("prepare_publish", "draft_product")
+    graph.add_edge("prepare_publish", "validate_images")
+    graph.add_edge("validate_images", "draft_product")
     graph.add_edge("draft_product", "record_run")
     graph.add_edge("record_run", END)
     return graph.compile()
