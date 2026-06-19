@@ -1,12 +1,45 @@
 # Jade Agent
 
 [![中文 README](https://img.shields.io/badge/%E4%B8%AD%E6%96%87-README-0f766e?style=for-the-badge)](./README.md)
+[![Python](https://img.shields.io/badge/Python-API-3776ab?style=for-the-badge)](./backend)
+[![React](https://img.shields.io/badge/React-SPA-149eca?style=for-the-badge)](./src)
+[![LangGraph](https://img.shields.io/badge/LangGraph-Agents-1c3c3c?style=for-the-badge)](./langgraph.json)
+[![Milvus](https://img.shields.io/badge/Milvus-Vector_RAG-00a1ea?style=for-the-badge)](./backend/vector_store.py)
+[![Ollama](https://img.shields.io/badge/Ollama-Local_Vision-111111?style=for-the-badge)](./backend/agent.py)
 
-Jade Agent is an AI agent system for jade commerce. It covers buyer natural-language sourcing, merchant image-based publishing, product management, lead follow-up, and agent run tracing.
+Jade Agent is a full-stack AI Agent + Agentic RAG system for vertical commerce. It turns jadeite sourcing, merchant image publishing, product operations, and lead follow-up into runnable, traceable, locally deployable agent workflows.
 
-The goal is to turn buyer messages into searchable, rankable, explainable product matches; turn merchant uploads into reviewable AI-assisted product drafts; and persist every recommendation and follow-up as traceable execution records.
+This project is useful if you are exploring:
 
-## Scope
+- AI agent applications beyond a chatbot demo.
+- LangGraph state machines, routing, tool use, and execution traces.
+- RAG retrieval, product ranking, recommendation explanations, and business rules working together.
+- Local multimodal models that read merchant-uploaded images and draft editable product listings.
+- A complete loop across frontend, API, database, vector search, and agent observability.
+
+## Quick Links
+
+| Link | What it covers |
+| --- | --- |
+| [Architecture](#architecture) | React, Python API, LangGraph, SQLite, Milvus, and Ollama |
+| [Agent Architecture](#agent-architecture) | Buyer sourcing, merchant publishing, and lead follow-up workflows |
+| [Buyer Matching Logic](#buyer-matching-logic) | Multi-turn understanding, RAG retrieval, ranking, and explanations |
+| [RAG Data Flow](#rag-data-flow) | How SQLite product documents and Milvus vector search work together |
+| [Run Locally](#run-locally) | Start the frontend, backend, database, and agent services |
+| [LangSmith Studio](#langsmith-studio) | Inspect LangGraph structure and execution state |
+
+## Why This Project
+
+| Open-source agent pattern | Jade Agent implementation |
+| --- | --- |
+| Stateful agent | `agent_sessions` stores multi-turn sourcing state, and latest-turn preferences refine or override prior needs |
+| Tool-using agent | The buyer agent calls RAG retrieval, inventory boundary checks, ranking, and lead creation logic |
+| Agentic RAG | Milvus vector retrieval + SQLite keyword evidence + business-rule ranking, not a single RAG answer |
+| Multimodal agent | The merchant publishing agent reads uploaded images and extracts category, color, water quality, shape, motifs, and flaw descriptions |
+| Human-editable workflow | AI-generated product drafts move into an edit screen before merchant publishing |
+| Observability | Frontend trace panel, `agent_runs`, `/api/agent/runs`, and a local LangSmith Studio graph |
+
+## Core Features
 
 | Module | Capability |
 | --- | --- |

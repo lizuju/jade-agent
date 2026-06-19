@@ -1,12 +1,45 @@
 # Jade Agent
 
 [![English README](https://img.shields.io/badge/English-README-0f766e?style=for-the-badge)](./README_EN.md)
+[![Python](https://img.shields.io/badge/Python-API-3776ab?style=for-the-badge)](./backend)
+[![React](https://img.shields.io/badge/React-SPA-149eca?style=for-the-badge)](./src)
+[![LangGraph](https://img.shields.io/badge/LangGraph-Agents-1c3c3c?style=for-the-badge)](./langgraph.json)
+[![Milvus](https://img.shields.io/badge/Milvus-Vector_RAG-00a1ea?style=for-the-badge)](./backend/vector_store.py)
+[![Ollama](https://img.shields.io/badge/Ollama-Local_Vision-111111?style=for-the-badge)](./backend/agent.py)
 
-Jade Agent 是一个面向翡翠交易的 AI Agent 系统，覆盖买家自然语言找货、商家上传发布、商品管理、客资跟进和 Agent 运行追踪。
+Jade Agent 是一个面向垂直电商的 AI Agent + Agentic RAG 全栈项目。它把翡翠交易里的买家找货、商家图片发布、商品管理和客资跟进做成可运行、可追踪、可本地部署的 Agent 系统。
 
-核心目标：把买家的口语需求转成可检索、可排序、可解释的商品匹配流程；把商家的图片上传和商品发布变成可复核的 AI 辅助流程；把每次推荐和跟进沉淀成可追踪的运行记录。
+这个项目适合关注以下方向的开发者：
 
-## 功能范围
+- AI Agent 应用落地，而不是只做聊天 demo。
+- LangGraph 状态机、分支路由、工具调用和运行 trace。
+- RAG 检索、商品排序、推荐解释和业务规则协同。
+- 本地多模态模型识别商家上传图片，并生成可编辑商品草稿。
+- 从前端、后端、数据库、向量库到 Agent 可观测性的完整闭环。
+
+## 快速入口
+
+| 入口 | 内容 |
+| --- | --- |
+| [架构图](#架构图) | React、Python API、LangGraph、SQLite、Milvus、Ollama 的整体关系 |
+| [Agent 架构](#agent-架构) | 买家找货、商家发布、客资跟进三个 LangGraph workflow |
+| [买家匹配逻辑](#买家匹配逻辑) | 多轮需求理解、RAG 召回、排序和解释 |
+| [RAG 数据流](#rag-数据流) | SQLite 商品文档和 Milvus 向量索引如何协同 |
+| [运行](#运行) | 本地启动前端、后端、数据库和 Agent 服务 |
+| [LangSmith Studio](#langsmith-studio) | 查看 LangGraph 图和执行状态 |
+
+## 为什么值得看
+
+| 常见 Agent 开源能力 | Jade Agent 中的实现 |
+| --- | --- |
+| Stateful agent | `agent_sessions` 保存多轮找货状态，当前轮偏好会覆盖或细化历史需求 |
+| Tool-using agent | 买家 Agent 调用 RAG 检索、库存边界检查、排序、客资写入等工具逻辑 |
+| Agentic RAG | Milvus 向量召回 + SQLite 关键词证据 + 业务规则排序，不把 RAG 当成单次问答 |
+| Multimodal agent | 商家发布 Agent 读取上传图片，识别品类、颜色、种水、器型、题材和瑕疵描述 |
+| Human-editable workflow | AI 生成商品草稿后进入编辑页，由商家复核再发布 |
+| Observability | 前端 trace、`agent_runs` 表、`/api/agent/runs` 和 LangSmith Studio 本地图 |
+
+## 核心功能
 
 | 模块 | 功能 |
 | --- | --- |
