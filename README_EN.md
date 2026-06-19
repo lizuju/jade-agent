@@ -2,226 +2,244 @@
 
 [![中文 README](https://img.shields.io/badge/%E4%B8%AD%E6%96%87-README-0f766e?style=for-the-badge)](./README.md)
 
-Jade Agent is a vertical AI agent system for jade commerce. It is not a general-purpose chatbot. It turns real marketplace actions such as buyer sourcing, merchant publishing, and lead follow-up into executable, traceable, and explainable agent workflows.
+Jade Agent is an AI agent system for jade commerce. It covers buyer natural-language sourcing, merchant image-based publishing, product management, lead follow-up, and agent run tracing.
 
-The core goal is simple: a buyer can say something natural, such as "I want an icy jade bangle for my mother, around 50k RMB, clean looking", and the backend will extract category, budget, water quality, color, occasion, flaw tolerance, and price preference. It then retrieves product evidence from the local catalog, ranks products, explains the recommendation, and creates merchant leads when the buyer provides an email.
+The goal is to turn buyer messages into searchable, rankable, explainable product matches; turn merchant uploads into reviewable AI-assisted product drafts; and persist every recommendation and follow-up as traceable execution records.
 
-## What This System Does
+## Scope
 
-Jade Agent simulates an AI sourcing and merchant operations assistant inside a jade e-commerce marketplace.
-
-On the buyer side, it turns vague natural language into structured sourcing constraints and explainable recommendations. Buyers do not need to fill out complex filters. They can describe budget, product type, use case, jade water quality, color, bangle size, or gift scenario in plain language.
-
-On the merchant side, it helps with product publishing and lead follow-up. A merchant can upload product images and add short notes to generate a product draft. When a buyer inquiry becomes a lead, the system can generate follow-up copy, next actions, and risk notes.
-
-On the engineering side, every agent run keeps its input, output, trace, retrieval evidence, and ranking reasons, so the system can answer why a product was recommended and which business signals were understood.
-
-## Core Capabilities
-
-- **Natural-language sourcing**: parses buyer messages into category, budget, color, water quality, size, occasion, flaws, and certificate requirements.
-- **Context refinement**: supports multi-turn sourcing, such as "show me bangles" followed by "mid price" or "a little greener".
-- **Local RAG retrieval**: products are converted into searchable documents, then used as retrieval evidence for buyer needs.
-- **Rules plus semantic ranking**: combines hard constraints, budget fit, business concept hits, RAG matches, and latest preference signals.
-- **Explainable agent traces**: records intent detection, concept understanding, inventory boundary checks, RAG retrieval, ranking, explanation, and lead creation.
-- **Merchant publish assistance**: drafts product title, category, price, detail copy, tags, and checks from images and notes.
-- **Lead follow-up assistance**: drafts follow-up messages, next steps, and risk notes from buyer inquiries and product data.
+| Module | Capability |
+| --- | --- |
+| Buyer app | AI sourcing chat, multi-turn refinement, product recommendations, product detail, lead creation |
+| Merchant app | Login, dashboard, product publishing, editing, listing, delisting, deletion, recycle bin, product list |
+| Lead app | Lead list, lead detail, contact status, AI follow-up copy |
+| Agent layer | Buyer matching agent, merchant publishing agent, lead follow-up agent, RAG retrieval, ranking explanations, run traces |
+| Data layer | SQLite product catalog, product retrieval documents, sessions, messages, leads, agent runs |
+| Observability | Frontend trace panel, `agent_runs`, `/api/agent/runs`, local LangSmith Studio graph view |
 
 ## Architecture
 
-```text
-React / Vite frontend
-  ├─ Buyer sourcing UI
-  ├─ Merchant dashboard
-  ├─ Product publishing
-  └─ Lead follow-up
+```mermaid
+flowchart LR
+  Buyer["Buyer React App\n#buyer / #product/:id"] --> API["Python HTTP API\nbackend/app.py\n:8787"]
+  Merchant["Merchant React App\n#merchant / #publish / #products / #leads"] --> API
 
-Python HTTP API
-  ├─ backend/app.py                 API routes and upload serving
-  ├─ backend/agent.py               Agent orchestration, ranking, reply generation
-  ├─ backend/query_understanding.py Query understanding and business concept matching
-  ├─ backend/db.py                  SQLite, product documents, run records
-  └─ backend/validation.py          User input boundary validation
+  API --> BuyerGraph["BUYER_MATCH_GRAPH\nprepare_context -> route -> match/service/clarify -> persist"]
+  API --> PublishGraph["PUBLISH_GRAPH\nprepare_publish -> draft_product -> record_run"]
+  API --> LeadGraph["LEAD_FOLLOWUP_GRAPH\nload_lead -> write_followup -> record_run"]
 
-SQLite data layer
-  ├─ products                        Products
-  ├─ product_documents               RAG retrieval documents
-  ├─ query_concepts                  Business concept dictionary
-  ├─ query_understanding_events      Query understanding events
-  ├─ agent_sessions / messages       Conversation state
-  ├─ agent_runs                      Agent execution traces
-  └─ leads                           Buyer leads
+  BuyerGraph --> QU["Query Understanding\nconcept extraction + intent + latest signal"]
+  BuyerGraph --> RAG["RAG Tool\nsearch_product_documents"]
+  BuyerGraph --> Rank["Ranking Agent\nrules + semantics + budget + latest preference"]
+  PublishGraph --> Vision["Ollama Vision Agent\nmerchant uploaded images"]
+  LeadGraph --> Follow["Follow-up Agent\nbuyer need + product + seller"]
+
+  QU --> DB["SQLite\nproducts / leads / sessions / messages / agent_runs"]
+  RAG --> Docs["product_documents"]
+  Rank --> DB
+  Docs --> DB
+  Vision --> Uploads["public/uploads\nimage + metadata"]
+  API --> DB
+
+  Studio["LangGraph Studio\nbackend/studio_graphs.py\n:2024"] --> BuyerGraph
+  Studio --> PublishGraph
+  Studio --> LeadGraph
 ```
 
-## AI Agent Design
+## Agent Architecture
 
-The system decomposes each marketplace action into explicit agent steps instead of asking a model to directly produce the final answer.
+The backend uses Python and LangGraph. Core logic lives in `backend/agent.py`, Studio wrapper graphs live in `backend/studio_graphs.py`, and graph exports are declared in `langgraph.json`.
 
-### 1. Intent Agent
+### 1. Buyer Sourcing Agent
 
-The first step classifies the user message:
+Endpoint: `POST /api/agent/buyer-match`
 
-- `match`: a new sourcing request
-- `refine`: a refinement of the previous sourcing request
-- `customer_service`: customer-service chat or jade knowledge
-- `clarify`: missing information or inventory constraints require a follow-up question
+Graph: `BUYER_MATCH_GRAPH`
 
-This prevents every message from becoming a product recommendation. For example, "hello" becomes a service reply, while "the most expensive one" can refine the previous sourcing context as a price preference.
+```mermaid
+flowchart LR
+  Start["START"] --> Prepare["prepare_context"]
+  Prepare --> Route{"buyer_route"}
+  Route -->|match| Match["match_products"]
+  Route -->|customer_service| Service["customer_service"]
+  Route -->|budget_clarify| Clarify["budget_clarify"]
+  Match --> Persist["persist_run"]
+  Service --> Persist
+  Clarify --> Persist
+  Persist --> End["END"]
+```
 
-### 2. Query Understanding Agent
+Node responsibilities:
 
-The query understanding layer converts buyer language into structured fields and preference signals:
-
-- Category: bangle, pendant, necklace, ring stone, safety buckle
-- Budget: `50k RMB`, `mid price`, `unlimited budget`
-- Water quality: waxy, icy waxy, icy, high icy, glassy
-- Color: clear base, white icy, floating green, vivid green, lavender, blue water
-- Occasion: gift, self wear, collection, daily wear, business gift
-- Quality requirements: no cracks, clean looking, certificate, natural jadeite
-
-This layer is implemented mainly in `backend/query_understanding.py` and the `query_concepts` table.
-
-### 3. Inventory Boundary Agent
-
-Before ranking products, the system checks whether current inventory can satisfy hard constraints. If the requested category, color, size, or budget cannot be covered, it asks a clarification question instead of forcing unrelated recommendations.
-
-### 4. RAG Retrieval Tool
-
-Product data is converted into documents in `product_documents`. Buyer needs are expanded into business terms, then used to retrieve relevant product evidence and candidate products.
-
-### 5. Ranking Agent
-
-Ranking is not pure keyword matching. It combines:
-
-- category consistency
-- price fit against budget
-- water quality, color, and shape matches
-- certificate, no-crack, and size constraints
-- RAG document match strength
-- latest turn preference, such as premium, lowest price, mid price, gift, clean look, or premium look
-
-Each product receives `matchScore`, `matchReasons`, and `agentScore`, which are used to explain the recommendation.
-
-### 6. Explanation Agent
-
-The explanation step turns ranking output into a buyer-facing response: what product is recommended first, why it is recommended, how many product evidence documents were retrieved, and how the buyer need was understood.
-
-### 7. Memory and Tracing
-
-The system stores conversation state in `agent_sessions` and `messages`, agent execution records in `agent_runs`, and concept hits in `query_understanding_events`.
-
-## How LangGraph Is Used
-
-The backend now uses LangGraph. `backend/agent.py` exposes three compiled graphs:
-
-- `BUYER_MATCH_GRAPH`: buyer sourcing with context preparation, intent routing, budget clarification, customer-service replies, product matching, and run logging.
-- `PUBLISH_GRAPH`: merchant publishing with publish-input preparation, image-based product draft generation, and run logging.
-- `LEAD_FOLLOWUP_GRAPH`: lead follow-up with lead loading, follow-up copy generation, and run logging.
-
-Using LangChain / LangGraph terminology, the current implementation maps to these concepts:
-
-| LangChain / LangGraph concept | Current implementation |
+| Node | Responsibility |
 | --- | --- |
-| Graph | `BUYER_MATCH_GRAPH`, `PUBLISH_GRAPH`, `LEAD_FOLLOWUP_GRAPH` |
-| Node | `buyer_prepare_node`, `buyer_match_node`, `publish_draft_node`, `lead_followup_node`, etc. |
-| Conditional Edge | Buyer sourcing routes to budget clarification, customer service, or product matching based on intent |
-| Tool | RAG retrieval, inventory boundary check, lead creation, product draft generation |
-| Retriever | `search_product_documents()` |
-| Document Store | SQLite table `product_documents` |
-| Memory | `agent_sessions`, `messages`, `lastParsedNeed` |
-| Callback / Trace | `trace` fields and the `agent_runs` table |
-| Prompt / Output Parser | Concept normalization, structured signals, and optional Ollama JSON parsing in `query_understanding.py` |
+| `prepare_context` | Reads or creates a session, stores the user message, loads prior need state, detects intent, understands concepts, extracts latest-turn signals, and validates boundaries |
+| `buyer_route` | Routes the turn to matching, customer service, or budget clarification |
+| `match_products` | Runs inventory boundary checks, query expansion, RAG retrieval, candidate filtering, multi-signal ranking, recommendation explanation, and lead creation |
+| `customer_service` | Handles greetings, jade knowledge, and answerable non-matching questions |
+| `budget_clarify` | Asks a follow-up question when the budget is clearly out of range |
+| `persist_run` | Stores assistant messages, session state, and `agent_runs` traces |
 
-Business logic still lives in local Python functions. LangGraph is used to organize those steps into branchable, traceable, replaceable agent workflows.
+Key buyer agent state:
 
-### Local LangSmith Studio
+| Field | Meaning |
+| --- | --- |
+| `need_text` | Current user message |
+| `session_state.lastParsedNeed` | Prior structured need used for multi-turn refinement |
+| `parsed_need` | Current merged sourcing constraints |
+| `latest_signal` | Strong current-turn signal, such as premium, cheaper, budget, color, category, or occasion |
+| `retrieval.documents` | RAG evidence |
+| `products` | Ranked recommendations |
+| `trace` | Agent and tool execution details |
 
-The project also includes `langgraph.json` and `backend/studio_graphs.py` to expose the existing workflows to LangSmith Studio:
+### 2. Merchant Publishing Agent
 
-```bash
-npm run graph:validate
-npm run dev:graph
+Endpoint: `POST /api/agent/publish`
+
+Graph: `PUBLISH_GRAPH`
+
+```mermaid
+flowchart LR
+  Start["START"] --> Prepare["prepare_publish"]
+  Prepare --> Draft["draft_product"]
+  Draft --> Record["record_run"]
+  Record --> End["END"]
 ```
 
-Use this Base URL in Studio:
+Node responsibilities:
 
-```text
-http://127.0.0.1:2024
+| Node | Responsibility |
+| --- | --- |
+| `prepare_publish` | Reads merchant, uploaded images, merchant notes, and image analysis results |
+| `draft_product` | Generates editable product title, intro, detail, tags, price, and fields from image-recognition output |
+| `record_run` | Stores the publishing agent run |
+
+Image strategy:
+
+- Merchants upload images to `public/uploads`.
+- Product records keep image URLs, and product detail, product management, and RAG documents reuse those fields.
+- Vision recognition prefers a local Ollama vision model such as `qwen2.5vl:3b`.
+- Generated copy is buyer-facing and does not expose internal terms such as RAG, agent recommendation explanation, or pending merchant measurement.
+
+### 3. Lead Follow-up Agent
+
+Endpoint: `POST /api/agent/leads/:id/followup`
+
+Graph: `LEAD_FOLLOWUP_GRAPH`
+
+```mermaid
+flowchart LR
+  Start["START"] --> Load["load_lead"]
+  Load --> Write["write_followup"]
+  Write --> Record["record_run"]
+  Record --> End["END"]
 ```
 
-Available graphs:
+Node responsibilities:
 
-- `buyer_match`: buyer sourcing. You can pass `need`, `buyerEmail`, and `sessionId`.
-- `merchant_publish`: merchant publishing. Pass `sellerId` and at least one uploaded image path, for example `/uploads/xxx.jpg`.
-- `lead_followup`: lead follow-up. You can pass `sellerId` and `leadId`; otherwise it uses the latest local seed lead.
+| Node | Responsibility |
+| --- | --- |
+| `load_lead` | Checks merchant authorization and loads the lead plus related product |
+| `write_followup` | Generates buyer summary, follow-up copy, next actions, and risk notes |
+| `record_run` | Stores messages and the agent run |
 
-Ports: `8787` is the product API, `5173` is the frontend, and `2024` is the LangGraph Studio Agent Server.
+## Buyer Matching Logic
 
-## RAG Design
+Buyer matching is not a single prompt response. It is split into four layers:
 
-The RAG layer is designed around the product catalog, not generic knowledge-base Q&A.
+1. **Intent detection**: identifies new sourcing, prior-need refinement, customer-service chat, or clarification needs.
+2. **Concept understanding**: extracts budget, category, color, water quality, size, flaws, certificate needs, occasion, and price preference.
+3. **RAG retrieval**: queries `product_documents` with the original text and expanded concepts.
+4. **Ranking and explanation**: ranks with hard constraints, budget fit, semantic hits, RAG evidence, and latest-turn preference.
 
-### 1. Document Construction
+Ranking signals:
 
-When a product is created or updated, the system converts product fields into searchable text:
+| Signal | Description |
+| --- | --- |
+| Category | Bangle, pendant, ring, necklace, ornament, and related product types as strong constraints |
+| Budget | In-budget products first, with reasonable near-budget support; clearly invalid low budgets trigger clarification |
+| Latest preference | Messages such as "most expensive", "cheaper", "mid price", "greener", and "for gifting" affect current-turn ranking |
+| Color / water quality | Compared through structured product fields and document hits |
+| Size / flaws / certificate | Used as rule constraints and recommendation explanations |
+| RAG evidence | Product document hits, tags, search keywords, and detail snippets |
 
-- title, SKU, category, price
-- material, treatment, water quality, color, shape
-- size, weight, flaws, certificate
-- occasion, tags, intro, detail, merchant notes
+## RAG Data Flow
 
-This text is stored in `product_documents` and becomes the retrieval source for buyer sourcing.
+When a product is created or updated, the system writes product fields into `product_documents`:
 
-### 2. Query Expansion
+- title, SKU, price, category
+- water quality, color, shape, size, weight
+- flaws, certificate, treatment
+- tags, intro, detail, merchant notes
 
-The raw buyer message is not used alone. Query Understanding expands it into retrieval-friendly business terms:
+When a buyer message enters the matching flow:
 
-- "for my mother" expands to gift, elder, certificate, no cracks
-- "a little greener" expands to vivid green, floating green, green family
-- "mid price" expands to mid price, daily wear, self wear
-- "clean looking" expands to no cracks, visually clean, less cotton, fewer flaws
+1. `query_understanding.py` extracts concepts and expansion terms.
+2. `search_product_documents()` searches `product_documents`.
+3. Retrieval returns product ID, matched terms, score, snippet, and product payload.
+4. `match_products` merges RAG results with structured rules for final ranking.
 
-These terms are combined with the original query during retrieval.
+RAG provides candidates and evidence. The ranking agent decides the final recommendations.
 
-### 3. Retrieval and Scoring
+## Database
 
-`search_product_documents()` searches local SQLite product documents and weights hits using matched terms, category boost, tags, and search keywords. Each retrieval result keeps:
+Local database: `data/jade-agent.sqlite`
 
-- product ID
-- document chunk type
-- matched terms
-- score
-- evidence snippet
-- product payload
+| Table | Purpose |
+| --- | --- |
+| `sellers` | Merchant accounts |
+| `seller_sessions` | Merchant login sessions |
+| `products` | Product table with images, status, price, detail copy, and tags |
+| `product_documents` | RAG retrieval documents |
+| `leads` | Buyer inquiry leads |
+| `agent_sessions` | Agent session state |
+| `messages` | Buyer and agent messages |
+| `agent_runs` | Input, output, trace, and status for every agent run |
+| `query_concepts` | Query-understanding concept dictionary |
+| `query_understanding_events` | Per-turn query understanding events |
 
-### 4. RAG Is Evidence, Not the Final Answer
+## API
 
-RAG provides evidence and candidates. Final recommendations still go through rule-based ranking so products that match the text but violate price, category, size, or quality constraints do not rank first.
+| Endpoint | Description |
+| --- | --- |
+| `GET /api/health` | Backend health check |
+| `GET /api/app-state` | Frontend bootstrap state |
+| `POST /api/auth/otp` | Request merchant login code |
+| `POST /api/auth/login` | Merchant login |
+| `GET /api/products` | Product list |
+| `GET /api/products/:id` | Product detail |
+| `POST /api/products` | Create product |
+| `PUT /api/products/:id` | Update product |
+| `PATCH /api/products/:id/status` | List, delist, draft, or restore product |
+| `DELETE /api/products/:id` | Delete product |
+| `POST /api/uploads/images` | Upload product images and run vision analysis |
+| `GET /api/leads` | Merchant lead list |
+| `GET /api/leads/:id` | Lead detail |
+| `POST /api/leads/:id/contacted` | Mark lead as contacted |
+| `POST /api/agent/buyer-match` | Buyer sourcing agent |
+| `POST /api/agent/publish` | Merchant publishing agent |
+| `POST /api/agent/leads/:id/followup` | Lead follow-up agent |
+| `GET /api/agent/runs` | Agent run records |
 
-Final ranking considers:
-
-- RAG hits
-- structured buyer need
-- inventory boundaries
-- price range
-- category hard constraints
-- color, water quality, size, and certificate details
-- latest preference from the current turn
-
-## Local Development
+## Run Locally
 
 ```bash
 npm install
+python3 -m pip install -r requirements.txt
 npm run seed
 npm run dev
 ```
 
-Default URLs:
+URLs:
 
-- Buyer app: `http://127.0.0.1:5173/#/buyer`
-- Merchant app: `http://127.0.0.1:5173/#/merchant`
-- Backend: `http://127.0.0.1:8787`
+| Service | URL |
+| --- | --- |
+| Buyer app | `http://127.0.0.1:5173/#buyer` |
+| Merchant app | `http://127.0.0.1:5173/#merchant` |
+| Python API | `http://127.0.0.1:8787` |
+| Health check | `http://127.0.0.1:8787/api/health` |
 
-You can also run services separately:
+Run services separately:
 
 ```bash
 npm run dev:api
@@ -230,28 +248,78 @@ npm run dev:web
 
 The default local merchant login code is `123456`. Override it with `DEV_OTP_CODE`.
 
+## LangSmith Studio
+
+Start the LangGraph Agent Server:
+
+```bash
+npm run graph:validate
+npm run dev:graph
+```
+
+Studio Base URL:
+
+```text
+http://127.0.0.1:2024
+```
+
+Available graphs:
+
+| Graph | Input |
+| --- | --- |
+| `buyer_match` | `need`, `buyerEmail`, `sessionId` |
+| `merchant_publish` | `sellerId`, `hint`, `images`, `imageAnalyses` |
+| `lead_followup` | `sellerId`, `leadId` |
+
+Ports:
+
+| Port | Purpose |
+| --- | --- |
+| `5173` | React frontend |
+| `8787` | Product API |
+| `2024` | LangGraph Studio Agent Server |
+
 ## Environment Variables
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `8787` | Python API port |
 | `DEV_OTP_CODE` | `123456` | Local merchant login code |
-| `AI_PROVIDER` | `auto` | Set to `ollama` to let query understanding try the local model path |
-| `QUERY_UNDERSTANDING_PROVIDER` | unset | Set to `ollama` to force local Ollama attempts for query understanding |
-| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama base URL |
-| `OLLAMA_MODEL` / `AI_MODEL` | `qwen2.5:7b` | Ollama model name |
+| `AI_PROVIDER` | `auto` | Set to `ollama` to allow local text model query understanding |
+| `QUERY_UNDERSTANDING_PROVIDER` | unset | Set to `ollama` to force query understanding through Ollama |
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama service URL |
+| `OLLAMA_MODEL` / `AI_MODEL` | `qwen2.5:7b` | Text understanding model |
+| `OLLAMA_VISION_MODEL` / `VISION_MODEL` | auto selected | Merchant image recognition model |
+| `OLLAMA_VISION_TIMEOUT` | `60` | Vision request timeout in seconds |
+| `OLLAMA_VISION_KEEP_ALIVE` | `15m` | Vision model keep-alive |
+
+## Tests
+
+```bash
+npm run eval:agents
+npm run test:api
+npm run test:e2e
+npm test
+```
 
 ## Project Layout
 
 | Path | Description |
 | --- | --- |
-| `backend/app.py` | Python API routes and upload serving |
-| `backend/agent.py` | Core agent orchestration, ranking, reply generation, and trace logging |
-| `backend/query_understanding.py` | Query understanding, business concept matching, optional Ollama structured parsing |
-| `backend/db.py` | SQLite schema, seed data, product RAG documents, and run records |
-| `backend/validation.py` | API input boundary validation |
-| `src/App.jsx` | React frontend and business interactions |
-| `src/styles.css` | Frontend styles |
-| `scripts/dev.js` | Starts the Python API and Vite frontend together |
+| `backend/app.py` | Python API, auth, uploads, products, leads, and agent routes |
+| `backend/agent.py` | LangGraph workflows, buyer matching, merchant publishing, and lead follow-up |
+| `backend/query_understanding.py` | Query understanding, concept normalization, optional Ollama JSON parsing |
+| `backend/db.py` | SQLite schema, seed data, product documents, run records |
+| `backend/studio_graphs.py` | Graph wrappers for LangSmith Studio |
+| `backend/validation.py` | API boundary input validation |
+| `src/App.jsx` | Frontend entry and page mounting |
+| `src/screens/buyer.jsx` | Buyer sourcing chat and product detail |
+| `src/screens/merchant.jsx` | Merchant dashboard, publishing, products, leads, account pages |
+| `src/routing.jsx` | Hash route parsing |
+| `src/api.js` | Frontend API client |
+| `src/upload.js` | Image upload handling |
+| `src/styles/` | Page styles |
+| `tests/test_api.py` | Python API tests |
+| `tests/e2e/app-smoke.spec.js` | Playwright smoke tests |
 | `data/jade-agent.sqlite` | Local SQLite database |
 | `public/uploads` | Merchant-uploaded images |
