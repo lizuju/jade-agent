@@ -23,10 +23,19 @@ Jade Agent 是一个面向垂直电商的 AI Agent + Agentic RAG 全栈项目。
 | --- | --- |
 | [架构图](#架构图) | React、Python API、LangGraph、SQLite、Milvus、Ollama 的整体关系 |
 | [Agent 架构](#agent-架构) | 买家找货、商家发布、客资跟进三个 LangGraph workflow |
+| [产品截图](#产品截图) | 买家匹配、Agent Trace、商家发布、商品管理真实界面 |
 | [买家匹配逻辑](#买家匹配逻辑) | 多轮需求理解、RAG 召回、排序和解释 |
 | [RAG 数据流](#rag-数据流) | SQLite 商品文档和 Milvus 向量索引如何协同 |
 | [运行](#运行) | 本地启动前端、后端、数据库和 Agent 服务 |
 | [LangSmith Studio](#langsmith-studio) | 查看 LangGraph 图和执行状态 |
+
+## 产品截图
+
+| 买家 Agent 找货 | Agent 流程 Trace |
+| --- | --- |
+| ![买家 Agent 找货](docs/images/buyer-agent.png) | ![Agent 流程 Trace](docs/images/agent-flow.png) |
+| 商家图片发布 | 商品运营后台 |
+| ![商家图片发布](docs/images/merchant-publish.png) | ![商品运营后台](docs/images/product-ops.png) |
 
 ## 为什么值得看
 
@@ -84,6 +93,17 @@ flowchart LR
 ## Agent 架构
 
 后端使用 Python + LangGraph。核心逻辑在 `backend/agent.py`，Studio 包装图在 `backend/studio_graphs.py`，图声明在 `langgraph.json`。
+
+Jade Agent 的工作方式不是把用户输入直接交给一个大 prompt，而是把一次业务请求拆成可追踪的状态迁移：
+
+1. **理解输入**：把自然语言、上传图片或客资上下文转成结构化状态。
+2. **选择路径**：根据状态路由到匹配、客服、澄清、发布草稿或跟进话术。
+3. **调用工具**：读取 SQLite 主库、Milvus 向量索引、商品文档、上传图片和商家权限。
+4. **执行业务规则**：先做库存、预算、品类、权限等边界校验，再进入召回和排序。
+5. **生成输出**：输出推荐、商品草稿或跟进话术，并附带可读解释。
+6. **持久化 trace**：把输入、状态、节点输出和运行结果写入 `agent_runs`，方便调试和复盘。
+
+这个设计让 Agent 的每一步都有状态、有证据、有可观测记录，适合继续扩展成更复杂的商品推荐、多商家撮合或人工审核流程。
 
 ### 1. 买家找货 Agent
 
@@ -245,29 +265,6 @@ RAG 只提供候选和证据，最终推荐仍由排序 Agent 判断；上下架
 | --- | --- |
 | `jade_product_documents` | 商品文档向量索引，保存 `product_id`、`chunk_type`、`content`、`category`、`status`、`price` 和向量 |
 
-## API
-
-| 接口 | 说明 |
-| --- | --- |
-| `GET /api/health` | 后端健康检查 |
-| `GET /api/app-state` | 前端初始化数据 |
-| `POST /api/auth/otp` | 商家获取验证码 |
-| `POST /api/auth/login` | 商家登录 |
-| `GET /api/products` | 商品列表 |
-| `GET /api/products/:id` | 商品详情 |
-| `POST /api/products` | 创建商品 |
-| `PUT /api/products/:id` | 编辑商品 |
-| `PATCH /api/products/:id/status` | 上架、下架、草稿、恢复 |
-| `DELETE /api/products/:id` | 删除商品 |
-| `POST /api/uploads/images` | 上传商品图片并做视觉分析 |
-| `GET /api/leads` | 商家客资列表 |
-| `GET /api/leads/:id` | 客资详情 |
-| `POST /api/leads/:id/contacted` | 标记已联系 |
-| `POST /api/agent/buyer-match` | 买家找货 Agent |
-| `POST /api/agent/publish` | 商家发布 Agent |
-| `POST /api/agent/leads/:id/followup` | 客资跟进 Agent |
-| `GET /api/agent/runs` | Agent 运行记录 |
-
 ## 运行
 
 ```bash
@@ -356,27 +353,3 @@ npm run test:api
 npm run test:e2e
 npm test
 ```
-
-## 目录
-
-| 路径 | 说明 |
-| --- | --- |
-| `backend/app.py` | Python API、认证、上传、商品、客资和 Agent 路由 |
-| `backend/agent.py` | LangGraph 工作流、买家匹配、商家发布、客资跟进 |
-| `backend/query_understanding.py` | 需求理解、概念归一、可选 Ollama JSON 解析 |
-| `backend/db.py` | SQLite schema、种子数据、商品文档、Milvus 同步入口、运行记录 |
-| `backend/vector_store.py` | Milvus Client、embedding、商品向量写入和向量召回 |
-| `backend/studio_graphs.py` | LangSmith Studio 使用的图包装 |
-| `backend/validation.py` | API 边界输入校验 |
-| `src/App.jsx` | 前端入口和页面挂载 |
-| `src/screens/buyer.jsx` | 买家聊天找货和商品详情 |
-| `src/screens/merchant.jsx` | 商家后台、发布、商品、客资、账户页面 |
-| `src/routing.jsx` | hash 路由解析 |
-| `src/api.js` | 前端 API 客户端 |
-| `src/upload.js` | 图片上传处理 |
-| `src/styles/` | 页面样式 |
-| `tests/test_api.py` | Python API 测试 |
-| `tests/e2e/app-smoke.spec.js` | Playwright 冒烟测试 |
-| `data/jade-agent.sqlite` | 本地数据库 |
-| `data/jade-agent-milvus.db` | 本地 Milvus Lite 向量库 |
-| `public/uploads` | 商家上传图片 |

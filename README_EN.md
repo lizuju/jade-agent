@@ -23,10 +23,19 @@ This project is useful if you are exploring:
 | --- | --- |
 | [Architecture](#architecture) | React, Python API, LangGraph, SQLite, Milvus, and Ollama |
 | [Agent Architecture](#agent-architecture) | Buyer sourcing, merchant publishing, and lead follow-up workflows |
+| [Screenshots](#screenshots) | Real buyer matching, agent trace, merchant publishing, and product operations screens |
 | [Buyer Matching Logic](#buyer-matching-logic) | Multi-turn understanding, RAG retrieval, ranking, and explanations |
 | [RAG Data Flow](#rag-data-flow) | How SQLite product documents and Milvus vector search work together |
 | [Run Locally](#run-locally) | Start the frontend, backend, database, and agent services |
 | [LangSmith Studio](#langsmith-studio) | Inspect LangGraph structure and execution state |
+
+## Screenshots
+
+| Buyer sourcing agent | Agent execution trace |
+| --- | --- |
+| ![Buyer sourcing agent](docs/images/buyer-agent.png) | ![Agent execution trace](docs/images/agent-flow.png) |
+| Merchant image publishing | Product operations |
+| ![Merchant image publishing](docs/images/merchant-publish.png) | ![Product operations](docs/images/product-ops.png) |
 
 ## Why This Project
 
@@ -84,6 +93,17 @@ flowchart LR
 ## Agent Architecture
 
 The backend uses Python and LangGraph. Core logic lives in `backend/agent.py`, Studio wrapper graphs live in `backend/studio_graphs.py`, and graph exports are declared in `langgraph.json`.
+
+Jade Agent does not send user input directly into a single large prompt. Each business request is broken into traceable state transitions:
+
+1. **Understand input**: turn natural language, uploaded images, or lead context into structured state.
+2. **Choose a path**: route the state to matching, customer service, clarification, product drafting, or follow-up copy.
+3. **Call tools**: read SQLite source-of-truth data, Milvus vector indexes, product documents, uploaded images, and merchant authorization.
+4. **Apply business rules**: check inventory, budget, category, authorization, and other boundaries before retrieval and ranking.
+5. **Generate output**: return recommendations, editable product drafts, or follow-up copy with readable explanations.
+6. **Persist traces**: store inputs, state, node outputs, and final results in `agent_runs` for debugging and review.
+
+This makes each agent step stateful, evidence-backed, and observable, while leaving room for more advanced product recommendation, multi-merchant matching, and human review flows.
 
 ### 1. Buyer Sourcing Agent
 
@@ -245,29 +265,6 @@ The local vector database uses Milvus Lite by default: `data/jade-agent-milvus.d
 | --- | --- |
 | `jade_product_documents` | Product document vector index with `product_id`, `chunk_type`, `content`, `category`, `status`, `price`, and vectors |
 
-## API
-
-| Endpoint | Description |
-| --- | --- |
-| `GET /api/health` | Backend health check |
-| `GET /api/app-state` | Frontend bootstrap state |
-| `POST /api/auth/otp` | Request merchant login code |
-| `POST /api/auth/login` | Merchant login |
-| `GET /api/products` | Product list |
-| `GET /api/products/:id` | Product detail |
-| `POST /api/products` | Create product |
-| `PUT /api/products/:id` | Update product |
-| `PATCH /api/products/:id/status` | List, delist, draft, or restore product |
-| `DELETE /api/products/:id` | Delete product |
-| `POST /api/uploads/images` | Upload product images and run vision analysis |
-| `GET /api/leads` | Merchant lead list |
-| `GET /api/leads/:id` | Lead detail |
-| `POST /api/leads/:id/contacted` | Mark lead as contacted |
-| `POST /api/agent/buyer-match` | Buyer sourcing agent |
-| `POST /api/agent/publish` | Merchant publishing agent |
-| `POST /api/agent/leads/:id/followup` | Lead follow-up agent |
-| `GET /api/agent/runs` | Agent run records |
-
 ## Run Locally
 
 ```bash
@@ -356,27 +353,3 @@ npm run test:api
 npm run test:e2e
 npm test
 ```
-
-## Project Layout
-
-| Path | Description |
-| --- | --- |
-| `backend/app.py` | Python API, auth, uploads, products, leads, and agent routes |
-| `backend/agent.py` | LangGraph workflows, buyer matching, merchant publishing, and lead follow-up |
-| `backend/query_understanding.py` | Query understanding, concept normalization, optional Ollama JSON parsing |
-| `backend/db.py` | SQLite schema, seed data, product documents, Milvus sync entry points, run records |
-| `backend/vector_store.py` | Milvus client, embeddings, product vector writes, and vector retrieval |
-| `backend/studio_graphs.py` | Graph wrappers for LangSmith Studio |
-| `backend/validation.py` | API boundary input validation |
-| `src/App.jsx` | Frontend entry and page mounting |
-| `src/screens/buyer.jsx` | Buyer sourcing chat and product detail |
-| `src/screens/merchant.jsx` | Merchant dashboard, publishing, products, leads, account pages |
-| `src/routing.jsx` | Hash route parsing |
-| `src/api.js` | Frontend API client |
-| `src/upload.js` | Image upload handling |
-| `src/styles/` | Page styles |
-| `tests/test_api.py` | Python API tests |
-| `tests/e2e/app-smoke.spec.js` | Playwright smoke tests |
-| `data/jade-agent.sqlite` | Local SQLite database |
-| `data/jade-agent-milvus.db` | Local Milvus Lite vector database |
-| `public/uploads` | Merchant-uploaded images |
